@@ -1,0 +1,33 @@
+# Local reference clones (not part of the template deliverable)
+third-party-projects/
+
+# Build
+bin/
+dist/
+*.exe
+*.test
+coverage.out
+coverage.txt
+coverage.html
+
+# Go
+vendor/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Logs
+*.log
+
+# Local agent / auto-improve artifacts
+.project/
+enhancements/

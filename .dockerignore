@@ -1,0 +1,16 @@
+.git
+.bin
+bin/
+dist/
+third-party-projects/
+.project/
+coverage.out
+coverage.txt
+coverage.html
+*.log
+.env
+.env.*
+.idea/
+.vscode/
+*.swp
+.DS_Store

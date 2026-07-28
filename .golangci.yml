@@ -1,0 +1,17 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  exclusions:
+    paths:
+      - ^third-party-projects/
+      - ^bin/
+
+run:
+  timeout: 5m

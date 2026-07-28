@@ -1,0 +1,8 @@
+{
+  "name": "mcp-template-npm-package-placeholder-darwin-amd64",
+  "version": "0.0.0",
+  "description": "MCP server binary for darwin/amd64",
+  "files": ["bin/mcp-template-binary-placeholder"],
+  "os": ["darwin"],
+  "cpu": ["x64"]
+}

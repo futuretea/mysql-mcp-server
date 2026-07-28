@@ -1,0 +1,17 @@
+{
+  "name": "mcp-template-npm-package-placeholder",
+  "version": "0.0.0",
+  "description": "MCP server binary launcher",
+  "main": "./bin/index.js",
+  "bin": {
+    "mcp-template-binary-placeholder": "bin/index.js"
+  },
+  "optionalDependencies": {
+    "mcp-template-npm-package-placeholder-darwin-amd64": "0.0.0",
+    "mcp-template-npm-package-placeholder-darwin-arm64": "0.0.0",
+    "mcp-template-npm-package-placeholder-linux-amd64": "0.0.0",
+    "mcp-template-npm-package-placeholder-linux-arm64": "0.0.0",
+    "mcp-template-npm-package-placeholder-windows-amd64": "0.0.0"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,138 @@
+name: Release NPM
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "__MCP_GO_VERSION__"
+  BINARY_NAME: "mcp-template-binary-placeholder"
+  NPM_PACKAGE_DIRECTORY: "__MCP_NPM_DIRECTORY__"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve-platforms:
+    name: Resolve native platforms
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.platforms.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: platforms
+        run: echo "matrix=$(jq -c '.native' .github/ci/release-platforms.json)" >> "$GITHUB_OUTPUT"
+
+  validate-tag:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Validate stable semantic version tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Expected a stable semantic version tag in the form vX.Y.Z" >&2
+            exit 1
+          fi
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+  build-platform:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: [resolve-platforms, validate-tag]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve-platforms.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build native binary
+        env:
+          RELEASE_VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: |
+          suffix=''
+          if [ '${{ matrix.goos }}' = windows ]; then suffix=.exe; fi
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w \
+            -X example.invalid/mcp-template-module-placeholder/pkg/core/version.Version=${RELEASE_VERSION} \
+            -X example.invalid/mcp-template-module-placeholder/pkg/core/version.Commit=$(git rev-parse HEAD) \
+            -X example.invalid/mcp-template-module-placeholder/pkg/core/version.Date=$(git log -1 --format=%cI)" \
+            -o "dist/${BINARY_NAME}${suffix}" ./cmd/mcp-server
+      - name: Stage npm platform package
+        run: |
+          suffix=''
+          if [ '${{ matrix.goos }}' = windows ]; then suffix=.exe; fi
+          package_dir="npm/${NPM_PACKAGE_DIRECTORY}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "$package_dir/bin"
+          cp "dist/${BINARY_NAME}${suffix}" "$package_dir/bin/${BINARY_NAME}${suffix}"
+      - name: Archive npm platform package
+        run: >
+          tar -C npm -czf dist/npm-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          ${{ env.NPM_PACKAGE_DIRECTORY }}-${{ matrix.goos }}-${{ matrix.goarch }}
+      - name: Upload npm platform package
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/npm-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish npm packages and GitHub release
+    needs: [validate-tag, build-platform]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download npm platform packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: dist/npm-artifacts
+          merge-multiple: true
+      - name: Restore npm platform packages
+        run: |
+          for archive in dist/npm-artifacts/*.tar.gz; do
+            tar -xzf "$archive" -C npm
+          done
+      - name: Verify package contents
+        run: |
+          make npm-verify-binaries
+          (cd "npm/${NPM_PACKAGE_DIRECTORY}" && npm pack --dry-run)
+      - name: Publish npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: make npm-publish
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          make_latest: true

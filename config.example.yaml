@@ -1,0 +1,8 @@
+port: 0
+listen: 127.0.0.1
+sse_base_url: ""
+log_level: info
+enabled_tools: []
+disabled_tools: []
+enabled_domains: []
+disabled_domains: []

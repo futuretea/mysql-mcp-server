@@ -1,0 +1,8 @@
+{
+  "name": "mcp-template-npm-package-placeholder-linux-arm64",
+  "version": "0.0.0",
+  "description": "MCP server binary for linux/arm64",
+  "files": ["bin/mcp-template-binary-placeholder"],
+  "os": ["linux"],
+  "cpu": ["arm64"]
+}

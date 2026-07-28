@@ -1,0 +1,8 @@
+{
+  "name": "mcp-template-npm-package-placeholder-windows-amd64",
+  "version": "0.0.0",
+  "description": "MCP server binary for windows/amd64",
+  "files": ["bin/mcp-template-binary-placeholder.exe"],
+  "os": ["win32"],
+  "cpu": ["x64"]
+}
