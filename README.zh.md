@@ -202,6 +202,14 @@ make build
 make docker
 ```
 
+### 本地 MySQL E2E
+
+真实 MySQL E2E 测试仅供本地按需运行，不会进入 GitHub Actions 或 `make ci`。它会自行启动并删除一个临时的 `mysql:8.0.46` 容器，然后验证编译后的 CLI 与 MCP stdio transport：
+
+```bash
+MYSQL_MCP_INTEGRATION=1 go test ./internal/mysql -run '^TestMySQL8046Integration$' -count=1
+```
+
 ## License
 
 [MIT](LICENSE)

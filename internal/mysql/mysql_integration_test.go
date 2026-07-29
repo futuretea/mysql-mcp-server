@@ -25,7 +25,7 @@ func TestMySQL8046Integration(t *testing.T) {
 		t.Skip("Docker is unavailable; unit tests provide the declared substitute verification")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	port := startMySQL8046Container(t, ctx)
 	dsn := integrationRuntimeDSN(t, port)
@@ -37,6 +37,7 @@ func TestMySQL8046Integration(t *testing.T) {
 	assertQueryResult(t, ctx, service)
 	assertSystemViewsAreExcluded(t, ctx, db, service)
 	assertReadOnlyTransactionRejectsWrites(t, ctx, db)
+	assertExternalEntryPoints(t, ctx, dsn)
 }
 
 func startMySQL8046Container(t *testing.T, ctx context.Context) string {

@@ -212,6 +212,16 @@ make build
 make docker
 ```
 
+### Local MySQL E2E
+
+The real MySQL E2E suite is opt-in and never runs in GitHub Actions or through
+`make ci`. It starts and removes its own disposable `mysql:8.0.46` container,
+then exercises the compiled CLI and MCP stdio transport:
+
+```bash
+MYSQL_MCP_INTEGRATION=1 go test ./internal/mysql -run '^TestMySQL8046Integration$' -count=1
+```
+
 ## License
 
 [MIT](LICENSE)
