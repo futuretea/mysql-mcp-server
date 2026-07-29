@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -9,10 +10,10 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
-	"example.invalid/mcp-template-module-placeholder/internal/toolcatalog"
-	"example.invalid/mcp-template-module-placeholder/pkg/core/config"
-	"example.invalid/mcp-template-module-placeholder/pkg/core/version"
-	"example.invalid/mcp-template-module-placeholder/pkg/toolset"
+	"github.com/futuretea/mysql-mcp-server/internal/toolcatalog"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/config"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/version"
+	"github.com/futuretea/mysql-mcp-server/pkg/toolset"
 )
 
 // Configuration holds server startup settings.
@@ -80,14 +81,24 @@ func (s *Server) registerTool(tool toolset.ServerTool) {
 
 func newToolHandler(tool toolset.ServerTool) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		params := request.GetArguments()
-		if params == nil {
+		rawParams := request.GetRawArguments()
+		params, isObject := rawParams.(map[string]any)
+		if rawParams == nil {
 			params = map[string]any{}
+		} else if !isObject {
+			return NewTextResult("", invalidArgumentsError(tool.Domain)), nil
 		}
 
 		result, err := tool.Handler(ctx, params)
 		return NewTextResult(result, err), nil
 	}
+}
+
+func invalidArgumentsError(domain string) error {
+	if domain == "mysql" {
+		return errors.New("[mysql_invalid_params] invalid parameters")
+	}
+	return errors.New("invalid tool arguments")
 }
 
 // GetEnabledTools returns registered tool names.

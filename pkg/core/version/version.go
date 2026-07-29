@@ -2,7 +2,7 @@ package version
 
 import "fmt"
 
-const BinaryName = "mcp-template-binary-placeholder"
+const BinaryName = "mysql-mcp-server"
 
 var (
 	Version = "dev"

@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/viper"
 
-	"example.invalid/mcp-template-module-placeholder/pkg/core/config"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/config"
 )
 
 func TestLoadConfigDefaults(t *testing.T) {
@@ -76,5 +76,39 @@ func TestGetListenAddress(t *testing.T) {
 				t.Fatalf("GetListenAddress() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadMySQLRuntimeConfigRejectsMissingDSN(t *testing.T) {
+
+	_, err := config.LoadMySQLRuntimeConfig(func(string) string { return "" })
+	if err == nil {
+		t.Fatal("LoadMySQLRuntimeConfig() error = nil, want missing DSN error")
+	}
+	if strings.Contains(err.Error(), "MYSQL_DSN=") {
+		t.Fatalf("missing DSN error leaked configuration detail: %q", err)
+	}
+}
+
+func TestParseMySQLRuntimeConfigForcesParseTimeFalse(t *testing.T) {
+	input := "reader@tcp(127.0.0.1:3306)/inventory?parseTime=true"
+
+	cfg, err := config.ParseMySQLRuntimeConfig(input)
+	if err != nil {
+		t.Fatalf("ParseMySQLRuntimeConfig: %v", err)
+	}
+	if strings.Contains(cfg.DSN, "parseTime=true") {
+		t.Fatalf("DSN = %q, want parseTime=false", cfg.DSN)
+	}
+}
+
+func TestParseMySQLRuntimeConfigDoesNotEchoInvalidDSN(t *testing.T) {
+	input := "not a valid dsn"
+	_, err := config.ParseMySQLRuntimeConfig(input)
+	if err == nil {
+		t.Fatal("ParseMySQLRuntimeConfig() error = nil, want error")
+	}
+	if strings.Contains(err.Error(), input) {
+		t.Fatalf("invalid DSN error leaked input: %q", err)
 	}
 }

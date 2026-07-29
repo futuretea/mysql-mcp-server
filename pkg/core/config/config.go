@@ -3,12 +3,44 @@ package config
 import (
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 )
+
+// MySQLRuntimeConfig contains the runtime-only MySQL connection setting.
+type MySQLRuntimeConfig struct {
+	DSN string
+}
+
+// LoadMySQLRuntimeConfig loads the single MySQL DSN from its dedicated
+// environment variable. The DSN is not part of the static Viper config.
+func LoadMySQLRuntimeConfig(getenv func(string) string) (MySQLRuntimeConfig, error) {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	return ParseMySQLRuntimeConfig(getenv("MYSQL_DSN"))
+}
+
+// ParseMySQLRuntimeConfig validates a MySQL DSN and always disables ParseTime
+// so temporal results remain driver text values at the query encoding boundary.
+func ParseMySQLRuntimeConfig(dsn string) (MySQLRuntimeConfig, error) {
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" {
+		return MySQLRuntimeConfig{}, fmt.Errorf("MYSQL_DSN is required")
+	}
+
+	parsed, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
+		return MySQLRuntimeConfig{}, fmt.Errorf("MYSQL_DSN is invalid")
+	}
+	parsed.ParseTime = false
+	return MySQLRuntimeConfig{DSN: parsed.FormatDSN()}, nil
+}
 
 // StaticConfig contains configuration that is fixed when the server starts.
 type StaticConfig struct {

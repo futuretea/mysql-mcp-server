@@ -7,11 +7,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"example.invalid/mcp-template-module-placeholder/internal/toolcatalog"
-	"example.invalid/mcp-template-module-placeholder/pkg/core/config"
-	"example.invalid/mcp-template-module-placeholder/pkg/core/version"
-	"example.invalid/mcp-template-module-placeholder/pkg/toolset"
-	"example.invalid/mcp-template-module-placeholder/pkg/toolset/example"
+	internalmysql "github.com/futuretea/mysql-mcp-server/internal/mysql"
+	"github.com/futuretea/mysql-mcp-server/internal/toolcatalog"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/config"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/version"
+	"github.com/futuretea/mysql-mcp-server/pkg/toolset"
+	toolmysql "github.com/futuretea/mysql-mcp-server/pkg/toolset/mysql"
 )
 
 // IOStreams groups the streams used by the CLI.
@@ -82,11 +83,27 @@ func loadCLIConfig(cmd *cobra.Command, cfgFile string, v *viper.Viper) (*config.
 }
 
 func defaultToolsets() []toolset.Toolset {
-	return []toolset.Toolset{&example.Toolset{}}
+	return []toolset.Toolset{toolmysql.New(internalmysql.NewUnavailableService())}
 }
 
 func buildToolCatalog(cfg *config.StaticConfig) ([]toolset.ServerTool, error) {
-	return toolcatalog.Build(defaultToolsets(), toolset.FilterOptions{
+	return buildToolCatalogForToolsets(cfg, defaultToolsets())
+}
+
+func buildRuntimeToolsets() ([]toolset.Toolset, func()) {
+	runtimeConfig, err := config.LoadMySQLRuntimeConfig(nil)
+	if err != nil {
+		return defaultToolsets(), func() {}
+	}
+	service, err := internalmysql.NewService(runtimeConfig.DSN)
+	if err != nil {
+		return defaultToolsets(), func() {}
+	}
+	return []toolset.Toolset{toolmysql.New(service)}, func() { _ = service.Close() }
+}
+
+func buildToolCatalogForToolsets(cfg *config.StaticConfig, toolsets []toolset.Toolset) ([]toolset.ServerTool, error) {
+	return toolcatalog.Build(toolsets, toolset.FilterOptions{
 		EnabledTools:    cfg.EnabledTools,
 		DisabledTools:   cfg.DisabledTools,
 		EnabledDomains:  cfg.EnabledDomains,

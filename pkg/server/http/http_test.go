@@ -9,17 +9,18 @@ import (
 	"testing"
 	"time"
 
-	"example.invalid/mcp-template-module-placeholder/pkg/core/config"
-	internalhttp "example.invalid/mcp-template-module-placeholder/pkg/server/http"
-	mcpserver "example.invalid/mcp-template-module-placeholder/pkg/server/mcp"
-	"example.invalid/mcp-template-module-placeholder/pkg/toolset"
-	"example.invalid/mcp-template-module-placeholder/pkg/toolset/example"
+	internalmysql "github.com/futuretea/mysql-mcp-server/internal/mysql"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/config"
+	internalhttp "github.com/futuretea/mysql-mcp-server/pkg/server/http"
+	mcpserver "github.com/futuretea/mysql-mcp-server/pkg/server/mcp"
+	"github.com/futuretea/mysql-mcp-server/pkg/toolset"
+	toolmysql "github.com/futuretea/mysql-mcp-server/pkg/toolset/mysql"
 )
 
 func TestHealthz(t *testing.T) {
 	mcpServer, err := mcpserver.NewServer(mcpserver.Configuration{
 		StaticConfig: &config.StaticConfig{LogLevel: "info"},
-		Toolsets:     []toolset.Toolset{&example.Toolset{}},
+		Toolsets:     []toolset.Toolset{toolmysql.New(internalmysql.NewUnavailableService())},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -68,7 +69,7 @@ func TestHealthz(t *testing.T) {
 func TestServeListenerShutdown(t *testing.T) {
 	mcpServer, err := mcpserver.NewServer(mcpserver.Configuration{
 		StaticConfig: &config.StaticConfig{LogLevel: "info"},
-		Toolsets:     []toolset.Toolset{&example.Toolset{}},
+		Toolsets:     []toolset.Toolset{toolmysql.New(internalmysql.NewUnavailableService())},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

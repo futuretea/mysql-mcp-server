@@ -1,67 +1,72 @@
-# MCP Server Template
+# MySQL 只读 MCP Server
 
 [English](README.md)
 
-可 clone 的最小 MCP（Model Context Protocol）server 骨架。同一二进制同时提供给 AI 助手用的 **MCP server**，以及给人用的小型 **CLI**。内置示例工具 `echo` / `ping`。
-
-## 初始化派生仓库
-
-从此模板创建仓库后，先替换明确的占位符，再开始构建：
-
-```bash
-./scripts/init-template.sh \
-  --module github.com/acme/my-mcp \
-  --binary my-mcp \
-  --npm-package @acme/my-mcp \
-  --image ghcr.io/acme/my-mcp
-```
-
-该命令会生成构建工作流。只有项目已准备发布时才加 `--with-release`；它会额外生成 npm 和 Docker 的 tag 发布工作流。启用发布前，请先配置所需的镜像仓库凭证和 npm registry。使用 `--dry-run` 可只查看计划，不修改文件。
+连接单个 MySQL 8.0.46 目标的 MCP（Model Context Protocol）服务端与 CLI。它提供元数据发现和严格只读查询；不支持写入、管理、备份、复制或运行时切换目标。
 
 ## 快速开始
 
 ```bash
 # 需要 Go 1.25+（见 .tool-versions）
 make build
-./bin/mcp-template-binary-placeholder version
+./bin/mysql-mcp-server version
+
+# 只在运行环境设置，禁止提交。
+export MYSQL_DSN='<runtime-dsn>'
 
 # 启动 MCP server（默认 stdio）
-./bin/mcp-template-binary-placeholder mcp
+./bin/mysql-mcp-server mcp
 
 # 不经过 MCP 客户端，直接用 CLI 列工具 / 调工具
-./bin/mcp-template-binary-placeholder tools list
-./bin/mcp-template-binary-placeholder tools call echo --params '{"message":"hello"}'
-./bin/mcp-template-binary-placeholder tools call ping --params '{}'
+./bin/mysql-mcp-server tools list
+./bin/mysql-mcp-server tools call mysql_list_tables --params '{"database":"inventory"}'
+./bin/mysql-mcp-server tools call mysql_query --params '{"sql":"SELECT 1"}'
 ```
 
 ## 功能
 
-- **子命令 CLI**：`mcp` 才启动 server；`tools` / `version` / `completion` 独立
-- **多传输**：stdio、Streamable HTTP、SSE
-- **工具过滤**：`--enabled-tools`、`--disabled-tools`、`--enable-domains`、`--disable-domains`
-- **工程化默认项**：Makefile、Dockerfile、GitHub Actions CI、golangci-lint、MIT License
+- 六个 MySQL 发现与查询工具，同时通过 MCP 和 CLI 提供。
+- 在共享 tool handler 边界严格校验 JSON 参数。
+- 使用 Vitess AST 查询边界和 `database/sql` 只读事务。
+- 支持 stdio、Streamable HTTP 和 SSE。
+
+## MySQL 工具
+
+| 工具 | 参数 | 返回 |
+|---|---|---|
+| `mysql_get_server_info` | 无 | 版本、版本说明和当前 database。 |
+| `mysql_list_databases` | 无 | 运行账号可见的 databases。 |
+| `mysql_list_tables` | `database` | 指定 database 的基础表和视图。 |
+| `mysql_describe_table` | `database`、`table` | 列元数据。 |
+| `mysql_list_indexes` | `database`、`table` | 索引与 key parts。 |
+| `mysql_query` | `sql` | 单条查询的列和安全编码后的 rows。 |
+
+成功调用使用带 `schema_version: 1` 的同一 JSON envelope。未知、缺失、空字符串和非字符串参数会在访问数据库之前拒绝。
+
+`mysql_query` 只接受一条解析后的读查询。它拒绝多语句、非查询语句、`INTO`、锁定读、用户变量赋值和已阻断的会话/文件函数。通过后查询在只读事务中执行，并始终回滚。
+
+这不能证明存储函数、UDF、视图或插件没有副作用。请使用最小权限账号，不授予 `EXECUTE`、`FILE`、`LOCK TABLES` 或管理权限。
 
 ## CLI 命令
 
 | 命令 | 作用 |
 |------|------|
-| `mcp-template-binary-placeholder mcp` | 启动 MCP server（stdio 或 HTTP） |
-| `mcp-template-binary-placeholder tools list` | 列出已启用工具 |
-| `mcp-template-binary-placeholder tools describe <name>` | 查看工具 schema |
-| `mcp-template-binary-placeholder tools call <name>` | 用 JSON 参数调用工具 |
-| `mcp-template-binary-placeholder version` | 打印构建信息 |
-| `mcp-template-binary-placeholder completion <shell>` | 生成 shell 补全脚本 |
+| `mysql-mcp-server mcp` | 启动 MCP server（stdio 或 HTTP） |
+| `mysql-mcp-server tools list` | 列出已启用工具 |
+| `mysql-mcp-server tools describe <name>` | 查看工具 schema |
+| `mysql-mcp-server tools call <name>` | 用 JSON 参数调用工具 |
+| `mysql-mcp-server version` | 打印构建信息 |
+| `mysql-mcp-server completion <shell>` | 生成 shell 补全脚本 |
 
 ### tools 示例
 
 ```bash
-./bin/mcp-template-binary-placeholder tools list
-./bin/mcp-template-binary-placeholder tools list --json
-./bin/mcp-template-binary-placeholder tools describe echo
-./bin/mcp-template-binary-placeholder tools describe echo --json
-./bin/mcp-template-binary-placeholder tools call echo --params '{"message":"hello"}'
-echo '{"message":"hello"}' | ./bin/mcp-template-binary-placeholder tools call echo --params-file -
-./bin/mcp-template-binary-placeholder tools call ping --params '{}'
+./bin/mysql-mcp-server tools list
+./bin/mysql-mcp-server tools list --json
+./bin/mysql-mcp-server tools describe mysql_query
+./bin/mysql-mcp-server tools describe mysql_query --json
+./bin/mysql-mcp-server tools call mysql_list_tables --params '{"database":"inventory"}'
+echo '{"sql":"SELECT 1"}' | ./bin/mysql-mcp-server tools call mysql_query --params-file -
 ```
 
 ## MCP 传输模式
@@ -69,7 +74,7 @@ echo '{"message":"hello"}' | ./bin/mcp-template-binary-placeholder tools call ec
 ### Stdio（默认）
 
 ```bash
-./bin/mcp-template-binary-placeholder mcp
+./bin/mysql-mcp-server mcp
 ```
 
 Cursor / Claude Desktop 配置示例：
@@ -77,8 +82,8 @@ Cursor / Claude Desktop 配置示例：
 ```json
 {
   "mcpServers": {
-    "mcp-template-binary-placeholder": {
-      "command": "/absolute/path/to/bin/mcp-template-binary-placeholder",
+    "mysql-mcp-server": {
+      "command": "/absolute/path/to/bin/mysql-mcp-server",
       "args": ["mcp"]
     }
   }
@@ -88,7 +93,7 @@ Cursor / Claude Desktop 配置示例：
 ### Streamable HTTP
 
 ```bash
-./bin/mcp-template-binary-placeholder mcp --port 8080
+./bin/mysql-mcp-server mcp --port 8080
 curl -s http://127.0.0.1:8080/healthz
 ```
 
@@ -97,7 +102,7 @@ curl -s http://127.0.0.1:8080/healthz
 ```json
 {
   "mcpServers": {
-    "mcp-template-binary-placeholder": {
+    "mysql-mcp-server": {
       "url": "http://127.0.0.1:8080/mcp"
     }
   }
@@ -116,7 +121,7 @@ curl -s http://127.0.0.1:8080/healthz
 | `/message` | SSE message endpoint |
 
 ```bash
-./bin/mcp-template-binary-placeholder mcp --port 8080 --sse-base-url http://127.0.0.1:8080
+./bin/mysql-mcp-server mcp --port 8080 --sse-base-url http://127.0.0.1:8080
 ```
 
 ### Docker
@@ -125,11 +130,11 @@ curl -s http://127.0.0.1:8080/healthz
 # 构建
 make docker
 
-# Stdio（默认 ENTRYPOINT 为 mcp-template-binary-placeholder mcp）
-docker run -i --rm mcp-template-image-placeholder:dev
+# Stdio（默认 ENTRYPOINT 为 mysql-mcp-server mcp）
+docker run -i --rm -e MYSQL_DSN ghcr.io/futuretea/mysql-mcp-server:dev
 
 # HTTP
-docker run --rm -p 8080:8080 mcp-template-image-placeholder:dev --port 8080 --listen 0.0.0.0
+docker run --rm -e MYSQL_DSN -p 8080:8080 ghcr.io/futuretea/mysql-mcp-server:dev --port 8080 --listen 0.0.0.0
 ```
 
 HTTP / SSE **无鉴权、无 TLS**。默认 `--listen 127.0.0.1`。仅在受信网络使用；对外暴露时请自行加反向代理与认证。
@@ -146,6 +151,7 @@ HTTP / SSE **无鉴权、无 TLS**。默认 `--listen 127.0.0.1`。仅在受信�
 | `MCP_PORT` | HTTP 端口（`0` = stdio） | `0` |
 | `MCP_LISTEN` | HTTP 监听地址 | `127.0.0.1` |
 | `MCP_SSE_BASE_URL` | 对外 SSE base URL | `""` |
+| `MYSQL_DSN` | 必填的单一 MySQL runtime DSN；不会写入日志或返回 | 无 |
 
 ### 配置文件
 
@@ -163,7 +169,7 @@ disabled_domains: []
 ```
 
 ```bash
-./bin/mcp-template-binary-placeholder mcp --config config.example.yaml --port 8080
+./bin/mysql-mcp-server mcp --config config.example.yaml --port 8080
 ```
 
 ## 目录结构
@@ -171,21 +177,17 @@ disabled_domains: []
 ```
 cmd/mcp-server/          # 入口
 internal/cmd/            # cobra CLI（mcp / tools / version / completion）
+internal/mysql/          # 连接、发现、查询边界和结果编码
 pkg/core/                # config / logging / version
 pkg/server/mcp/          # MCP 注册与 transport
 pkg/server/http/         # HTTP / SSE / healthz
 pkg/toolset/             # Toolset 接口与过滤
-pkg/toolset/example/     # 示例 tools（替换为你的业务）
-.github/workflows/       # CI
-scripts/init-template.sh # 派生仓库初始化脚本
-templates/               # 由初始化脚本复制的 CI 与发布骨架
+pkg/toolset/mysql/       # 六个 MySQL 工具和共享参数 decoder
 ```
 
-## 扩展自己的 tools
+## 运行限制
 
-1. 在 `pkg/toolset/<your-domain>/` 实现 `toolset.Toolset`。
-2. 在 `internal/cmd/root.go` 的 `defaultToolsets()` 中挂载。
-3. 用 `--enabled-tools` / `--enable-domains` 控制暴露面。
+本切片有意不增加查询超时、行数限制、响应大小限制或并发预算。服务应只放在受信网络；HTTP 和 SSE 没有内置认证或 TLS 终止。
 
 ## 开发
 
@@ -199,12 +201,6 @@ make ci
 make build
 make docker
 ```
-
-生成的构建 CI（`.github/workflows/build.yaml`）会跑 lint、测试、多 OS 构建与 CLI smoke（`version` / `tools list`），以及 Docker 镜像构建。
-
-## 本地对照样例
-
-`third-party-projects/` 可放置本地对照代码，已在 `.gitignore` 中，不属于模板交付物。
 
 ## License
 

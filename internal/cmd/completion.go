@@ -14,16 +14,16 @@ func newCompletionCommand(streams IOStreams) *cobra.Command {
 		Long: `To load completions:
 
   Bash:
-    source <(mcp-template-binary-placeholder completion bash)
+    source <(mysql-mcp-server completion bash)
 
   Zsh:
-    source <(mcp-template-binary-placeholder completion zsh)
+    source <(mysql-mcp-server completion zsh)
 
   Fish:
-    mcp-template-binary-placeholder completion fish | source
+    mysql-mcp-server completion fish | source
 
   PowerShell:
-    mcp-template-binary-placeholder completion powershell | Out-String | Invoke-Expression`,
+    mysql-mcp-server completion powershell | Out-String | Invoke-Expression`,
 		DisableFlagsInUseLine: true,
 		ValidArgs:             []string{"bash", "zsh", "fish", "powershell", "install"},
 		Args:                  cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
@@ -52,15 +52,15 @@ func printCompletionInstall(out io.Writer) error {
 	_, err := fmt.Fprintln(out, `# Add the appropriate line to your shell profile:
 
 # bash (~/.bashrc or ~/.bash_profile):
-source <(mcp-template-binary-placeholder completion bash)
+source <(mysql-mcp-server completion bash)
 
 # zsh (~/.zshrc):
-source <(mcp-template-binary-placeholder completion zsh)
+source <(mysql-mcp-server completion zsh)
 
 # fish (~/.config/fish/config.fish):
-mcp-template-binary-placeholder completion fish | source
+mysql-mcp-server completion fish | source
 
 # PowerShell ($PROFILE):
-mcp-template-binary-placeholder completion powershell | Out-String | Invoke-Expression`)
+mysql-mcp-server completion powershell | Out-String | Invoke-Expression`)
 	return err
 }

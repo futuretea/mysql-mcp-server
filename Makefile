@@ -1,13 +1,13 @@
-BINARY_NAME ?= mcp-template-binary-placeholder
+BINARY_NAME ?= mysql-mcp-server
 GOLANGCI_LINT ?= golangci-lint
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT ?= $(shell git rev-parse --verify --quiet HEAD 2>/dev/null || echo unknown)
 DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS := -X example.invalid/mcp-template-module-placeholder/pkg/core/version.Version=$(VERSION) \
-	-X example.invalid/mcp-template-module-placeholder/pkg/core/version.Commit=$(COMMIT) \
-	-X example.invalid/mcp-template-module-placeholder/pkg/core/version.Date=$(DATE)
+LDFLAGS := -X github.com/futuretea/mysql-mcp-server/pkg/core/version.Version=$(VERSION) \
+	-X github.com/futuretea/mysql-mcp-server/pkg/core/version.Commit=$(COMMIT) \
+	-X github.com/futuretea/mysql-mcp-server/pkg/core/version.Date=$(DATE)
 
-# __MCP_RELEASE_INCLUDE__
+
 
 .PHONY: build test lint format tidy ci clean docker coverage
 
@@ -45,8 +45,8 @@ docker:
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(COMMIT) \
 		--build-arg BUILD_DATE=$(DATE) \
-		-t mcp-template-image-placeholder:$(DOCKER_TAG) \
-		-t mcp-template-image-placeholder:$(VERSION) .
+		-t ghcr.io/futuretea/mysql-mcp-server:$(DOCKER_TAG) \
+		-t ghcr.io/futuretea/mysql-mcp-server:$(VERSION) .
 
 clean:
 	rm -rf bin coverage.out coverage.txt

@@ -12,8 +12,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
-	"example.invalid/mcp-template-module-placeholder/pkg/core/config"
-	mcpserver "example.invalid/mcp-template-module-placeholder/pkg/server/mcp"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/config"
+	mcpserver "github.com/futuretea/mysql-mcp-server/pkg/server/mcp"
 )
 
 const (

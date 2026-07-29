@@ -7,7 +7,7 @@ import (
 
 	mcpprotocol "github.com/mark3labs/mcp-go/mcp"
 
-	"example.invalid/mcp-template-module-placeholder/pkg/toolset"
+	"github.com/futuretea/mysql-mcp-server/pkg/toolset"
 )
 
 func TestNewToolHandlerReturnsErrorResult(t *testing.T) {
@@ -37,5 +37,39 @@ func TestNewToolHandlerReturnsErrorResult(t *testing.T) {
 	}
 	if text.Type != "text" || text.Text != wantErr.Error() {
 		t.Fatalf("handler text = {Type:%q Text:%q}, want {Type:%q Text:%q}", text.Type, text.Text, "text", wantErr)
+	}
+}
+
+func TestNewToolHandlerRejectsNonObjectMySQLArguments(t *testing.T) {
+	calls := 0
+	handler := newToolHandler(toolset.ServerTool{
+		Domain: "mysql",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			calls++
+			return "ok", nil
+		},
+	})
+
+	for _, arguments := range []any{[]any{"unexpected"}, "unexpected"} {
+		request := mcpprotocol.CallToolRequest{Params: mcpprotocol.CallToolParams{Arguments: arguments}}
+		result, err := handler(t.Context(), request)
+		if err != nil {
+			t.Fatalf("handler transport error = %v, want nil", err)
+		}
+		if !result.IsError || len(result.Content) != 1 {
+			t.Fatalf("invalid arguments result = %+v, want one error result", result)
+		}
+		text, ok := result.Content[0].(mcpprotocol.TextContent)
+		if !ok || text.Text != "[mysql_invalid_params] invalid parameters" {
+			t.Fatalf("invalid arguments text = %#v, want mysql_invalid_params", result.Content[0])
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("handler calls = %d, want 0", calls)
+	}
+
+	result, err := handler(t.Context(), mcpprotocol.CallToolRequest{Params: mcpprotocol.CallToolParams{Arguments: map[string]any{}}})
+	if err != nil || result.IsError || calls != 1 {
+		t.Fatalf("empty object result = %+v, %v, calls=%d; want success and one call", result, err, calls)
 	}
 }

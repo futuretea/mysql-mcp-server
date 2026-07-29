@@ -7,10 +7,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"example.invalid/mcp-template-module-placeholder/pkg/core/config"
-	"example.invalid/mcp-template-module-placeholder/pkg/core/logging"
-	internalhttp "example.invalid/mcp-template-module-placeholder/pkg/server/http"
-	mcpserver "example.invalid/mcp-template-module-placeholder/pkg/server/mcp"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/config"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/logging"
+	internalhttp "github.com/futuretea/mysql-mcp-server/pkg/server/http"
+	mcpserver "github.com/futuretea/mysql-mcp-server/pkg/server/mcp"
 )
 
 func newMCPCommand(streams IOStreams, cfgFile *string, v *viper.Viper) *cobra.Command {
@@ -18,13 +18,13 @@ func newMCPCommand(streams IOStreams, cfgFile *string, v *viper.Viper) *cobra.Co
 		Use:   "mcp",
 		Short: "start the MCP server",
 		Example: `  # stdio mode (default)
-  mcp-template-binary-placeholder mcp
+  mysql-mcp-server mcp
 
   # HTTP mode on loopback
-  mcp-template-binary-placeholder mcp --port 8080
+  mysql-mcp-server mcp --port 8080
 
   # HTTP mode on a custom listen address
-  mcp-template-binary-placeholder mcp --port 8080 --listen 127.0.0.1`,
+  mysql-mcp-server mcp --port 8080 --listen 127.0.0.1`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := bindCommonFlags(v, cmd); err != nil {
 				return err
@@ -69,10 +69,12 @@ func runServer(ctx context.Context, cfgFile string, streams IOStreams, v *viper.
 	} else if err := logging.Initialize(cfg.LogLevel, streams.ErrOut); err != nil {
 		return fmt.Errorf("initialize logging: %w", err)
 	}
+	toolsets, release := buildRuntimeToolsets()
+	defer release()
 
 	server, err := mcpserver.NewServer(mcpserver.Configuration{
 		StaticConfig: cfg,
-		Toolsets:     defaultToolsets(),
+		Toolsets:     toolsets,
 	})
 	if err != nil {
 		return fmt.Errorf("create MCP server: %w", err)
