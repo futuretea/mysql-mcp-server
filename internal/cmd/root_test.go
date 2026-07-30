@@ -66,6 +66,23 @@ func TestToolsListAndCall(t *testing.T) {
 	}
 }
 
+func TestToolsCallReportsMissingMySQLDSN(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "")
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	root := cmd.NewRootCommand(cmd.IOStreams{Out: &out, ErrOut: &errOut})
+	root.SetArgs([]string{"tools", "call", "mysql_get_server_info"})
+
+	err := root.Execute()
+	if err == nil || err.Error() != "[mysql_configuration_unavailable] configuration unavailable" {
+		t.Fatalf("Execute() error = %v, want configuration unavailable", err)
+	}
+	if got, want := errOut.String(), "mysql runtime configuration unavailable: MYSQL_DSN is required\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	var out bytes.Buffer
 	root := cmd.NewRootCommand(cmd.IOStreams{Out: &out, ErrOut: &out})

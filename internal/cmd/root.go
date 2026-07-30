@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -90,16 +91,23 @@ func buildToolCatalog(cfg *config.StaticConfig) ([]toolset.ServerTool, error) {
 	return buildToolCatalogForToolsets(cfg, defaultToolsets())
 }
 
-func buildRuntimeToolsets() ([]toolset.Toolset, func()) {
+func buildRuntimeToolsets() ([]toolset.Toolset, func(), error) {
 	runtimeConfig, err := config.LoadMySQLRuntimeConfig(nil)
 	if err != nil {
-		return defaultToolsets(), func() {}
+		return defaultToolsets(), func() {}, err
 	}
 	service, err := internalmysql.NewService(runtimeConfig.DSN)
 	if err != nil {
-		return defaultToolsets(), func() {}
+		return defaultToolsets(), func() {}, errors.New("MySQL driver initialization failed")
 	}
-	return []toolset.Toolset{toolmysql.New(service)}, func() { _ = service.Close() }
+	return []toolset.Toolset{toolmysql.New(service)}, func() { _ = service.Close() }, nil
+}
+
+func reportRuntimeConfigurationError(out io.Writer, err error) {
+	if err == nil || out == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(out, "mysql runtime configuration unavailable: %v\n", err)
 }
 
 func buildToolCatalogForToolsets(cfg *config.StaticConfig, toolsets []toolset.Toolset) ([]toolset.ServerTool, error) {

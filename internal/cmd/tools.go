@@ -106,8 +106,9 @@ func newToolsCallCommand(streams IOStreams, cfgFile *string, v *viper.Viper) *co
 			if err != nil {
 				return err
 			}
-			toolsets, release := buildRuntimeToolsets()
+			toolsets, release, runtimeErr := buildRuntimeToolsets()
 			defer release()
+			reportRuntimeConfigurationError(streams.ErrOut, runtimeErr)
 			tools, err := buildToolCatalogForToolsets(cfg, toolsets)
 			if err != nil {
 				return err

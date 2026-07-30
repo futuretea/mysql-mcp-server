@@ -69,8 +69,9 @@ func runServer(ctx context.Context, cfgFile string, streams IOStreams, v *viper.
 	} else if err := logging.Initialize(cfg.LogLevel, streams.ErrOut); err != nil {
 		return fmt.Errorf("initialize logging: %w", err)
 	}
-	toolsets, release := buildRuntimeToolsets()
+	toolsets, release, runtimeErr := buildRuntimeToolsets()
 	defer release()
+	reportRuntimeConfigurationError(streams.ErrOut, runtimeErr)
 
 	server, err := mcpserver.NewServer(mcpserver.Configuration{
 		StaticConfig: cfg,
