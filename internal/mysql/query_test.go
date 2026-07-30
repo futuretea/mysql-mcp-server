@@ -9,6 +9,7 @@ func TestValidateQuery(t *testing.T) {
 	allowed := []string{
 		"SELECT 1",
 		"WITH recent AS (SELECT 1 AS id) SELECT id FROM recent",
+		"SELECT 1 UNION SELECT 2",
 		"SELECT 'GET_LOCK is text', /* INTO OUTFILE */ 1",
 	}
 	for _, sql := range allowed {
@@ -23,7 +24,9 @@ func TestValidateQuery(t *testing.T) {
 		"INSERT INTO accounts VALUES (1)",
 		"SELECT 1; SELECT 2",
 		"SELECT 1 INTO OUTFILE 'result.txt'",
+		"SELECT 1 UNION SELECT 2 INTO OUTFILE 'result.txt'",
 		"SELECT * FROM accounts FOR UPDATE",
+		"SELECT * FROM accounts UNION SELECT * FROM accounts FOR UPDATE",
 		"SELECT * FROM accounts LOCK IN SHARE MODE",
 		"SELECT @counter := 1",
 		"SELECT GET_LOCK('x', 1)",
