@@ -222,6 +222,32 @@ then exercises the compiled CLI and MCP stdio transport:
 MYSQL_MCP_INTEGRATION=1 go test ./internal/mysql -run '^TestMySQL8046Integration$' -count=1
 ```
 
+## Use released artifacts
+
+Release tags use `vX.Y.Z`. Use `X.Y.Z` for npm and `vX.Y.Z` for Docker.
+
+```bash
+npx -y @futuretea/mysql-mcp-server@<version>
+docker run --rm -i ghcr.io/futuretea/mysql-mcp-server:v<version>
+```
+
+Both launch the MCP server's `mcp` command. Arguments after the package or image are forwarded to that command.
+
+Configure an MCP client that supports stdio with npm:
+
+```json
+{
+  "mcpServers": {
+    "mysql-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "@futuretea/mysql-mcp-server@<version>"]
+    }
+  }
+}
+```
+
+Supported release platforms are recorded in `.github/ci/release-platforms.json`.
+
 ## License
 
 [MIT](LICENSE)

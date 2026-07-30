@@ -1,0 +1,8 @@
+{
+  "name": "@futuretea/mysql-mcp-server-linux-amd64",
+  "version": "0.0.0",
+  "description": "MCP server binary for linux/amd64",
+  "files": ["bin/mysql-mcp-server"],
+  "os": ["linux"],
+  "cpu": ["x64"]
+}

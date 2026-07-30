@@ -7,6 +7,7 @@ LDFLAGS := -X github.com/futuretea/mysql-mcp-server/pkg/core/version.Version=$(V
 	-X github.com/futuretea/mysql-mcp-server/pkg/core/version.Commit=$(COMMIT) \
 	-X github.com/futuretea/mysql-mcp-server/pkg/core/version.Date=$(DATE)
 
+-include release.mk
 
 
 .PHONY: build test lint format tidy ci clean docker coverage

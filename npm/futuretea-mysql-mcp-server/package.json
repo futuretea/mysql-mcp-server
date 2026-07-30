@@ -1,0 +1,17 @@
+{
+  "name": "@futuretea/mysql-mcp-server",
+  "version": "0.0.0",
+  "description": "MCP server binary launcher",
+  "main": "./bin/index.js",
+  "bin": {
+    "mysql-mcp-server": "bin/index.js"
+  },
+  "optionalDependencies": {
+    "@futuretea/mysql-mcp-server-darwin-amd64": "0.0.0",
+    "@futuretea/mysql-mcp-server-darwin-arm64": "0.0.0",
+    "@futuretea/mysql-mcp-server-linux-amd64": "0.0.0",
+    "@futuretea/mysql-mcp-server-linux-arm64": "0.0.0",
+    "@futuretea/mysql-mcp-server-windows-amd64": "0.0.0"
+  },
+  "license": "MIT"
+}
