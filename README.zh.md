@@ -11,8 +11,12 @@
 make build
 ./bin/mysql-mcp-server version
 
-# 只在运行环境设置，禁止提交。
-export MYSQL_DSN='<runtime-dsn>'
+# 只在运行环境设置，密码禁止提交。
+export MYSQL_MCP_HOST='127.0.0.1'
+export MYSQL_MCP_DB_PORT='3306'
+export MYSQL_MCP_USERNAME='readonly'
+export MYSQL_MCP_PASSWORD='<runtime-secret>'
+export MYSQL_MCP_DATABASE='inventory'
 
 # 启动 MCP server（默认 stdio）
 ./bin/mysql-mcp-server mcp
@@ -84,7 +88,14 @@ Cursor / Claude Desktop 配置示例：
   "mcpServers": {
     "mysql-mcp-server": {
       "command": "/absolute/path/to/bin/mysql-mcp-server",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "MYSQL_MCP_HOST": "127.0.0.1",
+        "MYSQL_MCP_DB_PORT": "3306",
+        "MYSQL_MCP_USERNAME": "readonly",
+        "MYSQL_MCP_PASSWORD": "<runtime-secret>",
+        "MYSQL_MCP_DATABASE": "inventory"
+      }
     }
   }
 }
@@ -131,10 +142,16 @@ curl -s http://127.0.0.1:8080/healthz
 make docker
 
 # Stdio（默认 ENTRYPOINT 为 mysql-mcp-server mcp）
-docker run -i --rm -e MYSQL_DSN ghcr.io/futuretea/mysql-mcp-server:dev
+docker run -i --rm \
+  -e MYSQL_MCP_HOST -e MYSQL_MCP_DB_PORT -e MYSQL_MCP_USERNAME \
+  -e MYSQL_MCP_PASSWORD -e MYSQL_MCP_DATABASE \
+  ghcr.io/futuretea/mysql-mcp-server:dev
 
 # HTTP
-docker run --rm -e MYSQL_DSN -p 8080:8080 ghcr.io/futuretea/mysql-mcp-server:dev --port 8080 --listen 0.0.0.0
+docker run --rm \
+  -e MYSQL_MCP_HOST -e MYSQL_MCP_DB_PORT -e MYSQL_MCP_USERNAME \
+  -e MYSQL_MCP_PASSWORD -e MYSQL_MCP_DATABASE \
+  -p 8080:8080 ghcr.io/futuretea/mysql-mcp-server:dev --port 8080 --listen 0.0.0.0
 ```
 
 HTTP / SSE **无鉴权、无 TLS**。默认 `--listen 127.0.0.1`。仅在受信网络使用；对外暴露时请自行加反向代理与认证。
@@ -147,11 +164,15 @@ HTTP / SSE **无鉴权、无 TLS**。默认 `--listen 127.0.0.1`。仅在受信�
 
 | 变量 | 说明 | 默认 |
 |------|------|------|
-| `MCP_LOG_LEVEL` | 日志级别 | `info` |
-| `MCP_PORT` | HTTP 端口（`0` = stdio） | `0` |
-| `MCP_LISTEN` | HTTP 监听地址 | `127.0.0.1` |
-| `MCP_SSE_BASE_URL` | 对外 SSE base URL | `""` |
-| `MYSQL_DSN` | 必填的单一 MySQL runtime DSN；不会写入日志或返回 | 无 |
+| `MYSQL_MCP_LOG_LEVEL` | 日志级别 | `info` |
+| `MYSQL_MCP_PORT` | MCP HTTP 端口（`0` = stdio） | `0` |
+| `MYSQL_MCP_LISTEN` | MCP HTTP 监听地址 | `127.0.0.1` |
+| `MYSQL_MCP_SSE_BASE_URL` | 对外 SSE base URL | `""` |
+| `MYSQL_MCP_HOST` | MySQL TCP 主机 | `127.0.0.1` |
+| `MYSQL_MCP_DB_PORT` | MySQL TCP 端口；与 `MYSQL_MCP_PORT` 不同 | `3306` |
+| `MYSQL_MCP_USERNAME` | 必填的 MySQL 用户名 | 无 |
+| `MYSQL_MCP_PASSWORD` | 可选 MySQL 密码；不会写入日志或返回 | 无 |
+| `MYSQL_MCP_DATABASE` | 可选默认 MySQL database | 无 |
 
 ### 配置文件
 
@@ -228,7 +249,14 @@ docker run --rm -i ghcr.io/futuretea/mysql-mcp-server:v<version>
   "mcpServers": {
     "mysql-mcp-server": {
       "command": "npx",
-      "args": ["-y", "@futuretea/mysql-mcp-server@<version>"]
+      "args": ["-y", "@futuretea/mysql-mcp-server@<version>"],
+      "env": {
+        "MYSQL_MCP_HOST": "127.0.0.1",
+        "MYSQL_MCP_DB_PORT": "3306",
+        "MYSQL_MCP_USERNAME": "readonly",
+        "MYSQL_MCP_PASSWORD": "<runtime-secret>",
+        "MYSQL_MCP_DATABASE": "inventory"
+      }
     }
   }
 }

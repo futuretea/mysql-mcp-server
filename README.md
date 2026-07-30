@@ -13,8 +13,12 @@ support writes, administration, backups, replication, or dynamic targets.
 make build
 ./bin/mysql-mcp-server version
 
-# Set this only in the runtime environment. Do not commit it.
-export MYSQL_DSN='<runtime-dsn>'
+# Set these only in the runtime environment. Do not commit the password.
+export MYSQL_MCP_HOST='127.0.0.1'
+export MYSQL_MCP_DB_PORT='3306'
+export MYSQL_MCP_USERNAME='readonly'
+export MYSQL_MCP_PASSWORD='<runtime-secret>'
+export MYSQL_MCP_DATABASE='inventory'
 
 # Start MCP server (stdio, default)
 ./bin/mysql-mcp-server mcp
@@ -92,7 +96,14 @@ Cursor / Claude Desktop style config:
   "mcpServers": {
     "mysql-mcp-server": {
       "command": "/absolute/path/to/bin/mysql-mcp-server",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "MYSQL_MCP_HOST": "127.0.0.1",
+        "MYSQL_MCP_DB_PORT": "3306",
+        "MYSQL_MCP_USERNAME": "readonly",
+        "MYSQL_MCP_PASSWORD": "<runtime-secret>",
+        "MYSQL_MCP_DATABASE": "inventory"
+      }
     }
   }
 }
@@ -139,10 +150,16 @@ Same process as HTTP mode. Endpoints:
 make docker
 
 # Stdio (default ENTRYPOINT is `mysql-mcp-server mcp`)
-docker run -i --rm -e MYSQL_DSN ghcr.io/futuretea/mysql-mcp-server:dev
+docker run -i --rm \
+  -e MYSQL_MCP_HOST -e MYSQL_MCP_DB_PORT -e MYSQL_MCP_USERNAME \
+  -e MYSQL_MCP_PASSWORD -e MYSQL_MCP_DATABASE \
+  ghcr.io/futuretea/mysql-mcp-server:dev
 
 # HTTP
-docker run --rm -e MYSQL_DSN -p 8080:8080 ghcr.io/futuretea/mysql-mcp-server:dev --port 8080 --listen 0.0.0.0
+docker run --rm \
+  -e MYSQL_MCP_HOST -e MYSQL_MCP_DB_PORT -e MYSQL_MCP_USERNAME \
+  -e MYSQL_MCP_PASSWORD -e MYSQL_MCP_DATABASE \
+  -p 8080:8080 ghcr.io/futuretea/mysql-mcp-server:dev --port 8080 --listen 0.0.0.0
 ```
 
 HTTP / SSE have **no auth and no TLS**. Default `--listen 127.0.0.1`. Use only on trusted networks; put a reverse proxy in front if you expose the port.
@@ -155,11 +172,15 @@ Priority: **flags > environment variables > config file > defaults**.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MCP_LOG_LEVEL` | Log level | `info` |
-| `MCP_PORT` | HTTP port (`0` = stdio) | `0` |
-| `MCP_LISTEN` | HTTP listen host | `127.0.0.1` |
-| `MCP_SSE_BASE_URL` | Public SSE base URL | `""` |
-| `MYSQL_DSN` | Required single MySQL runtime DSN; never logged or returned | none |
+| `MYSQL_MCP_LOG_LEVEL` | Log level | `info` |
+| `MYSQL_MCP_PORT` | MCP HTTP port (`0` = stdio) | `0` |
+| `MYSQL_MCP_LISTEN` | MCP HTTP listen host | `127.0.0.1` |
+| `MYSQL_MCP_SSE_BASE_URL` | Public SSE base URL | `""` |
+| `MYSQL_MCP_HOST` | MySQL TCP host | `127.0.0.1` |
+| `MYSQL_MCP_DB_PORT` | MySQL TCP port; distinct from `MYSQL_MCP_PORT` | `3306` |
+| `MYSQL_MCP_USERNAME` | Required MySQL username | none |
+| `MYSQL_MCP_PASSWORD` | Optional MySQL password; never logged or returned | none |
+| `MYSQL_MCP_DATABASE` | Optional default MySQL database | none |
 
 ### Config file
 
@@ -240,7 +261,14 @@ Configure an MCP client that supports stdio with npm:
   "mcpServers": {
     "mysql-mcp-server": {
       "command": "npx",
-      "args": ["-y", "@futuretea/mysql-mcp-server@<version>"]
+      "args": ["-y", "@futuretea/mysql-mcp-server@<version>"],
+      "env": {
+        "MYSQL_MCP_HOST": "127.0.0.1",
+        "MYSQL_MCP_DB_PORT": "3306",
+        "MYSQL_MCP_USERNAME": "readonly",
+        "MYSQL_MCP_PASSWORD": "<runtime-secret>",
+        "MYSQL_MCP_DATABASE": "inventory"
+      }
     }
   }
 }

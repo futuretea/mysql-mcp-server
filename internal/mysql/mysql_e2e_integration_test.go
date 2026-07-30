@@ -3,12 +3,14 @@ package mysql
 import (
 	"bytes"
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -81,12 +83,17 @@ func assertCompiledCLIRejectsQueryBeforeDatabaseAccess(t *testing.T, ctx context
 
 func unavailableMySQLDSN(t *testing.T) string {
 	t.Helper()
-	return "root@unix(" + filepath.Join(t.TempDir(), "mysql.sock") + ")/mysql_mcp_test"
+	runtimeConfig := mysqldriver.NewConfig()
+	runtimeConfig.User = "root"
+	runtimeConfig.Net = "tcp"
+	runtimeConfig.Addr = "127.0.0.1:1"
+	runtimeConfig.DBName = "mysql_mcp_test"
+	return runtimeConfig.FormatDSN()
 }
 
 func assertCompiledMCPStdio(t *testing.T, ctx context.Context, binary, dsn string) {
 	t.Helper()
-	client, err := mcpclient.NewStdioMCPClient(binary, runtimeEnvironment(dsn), "mcp")
+	client, err := mcpclient.NewStdioMCPClient(binary, runtimeEnvironment(t, dsn), "mcp")
 	if err != nil {
 		t.Fatalf("start MCP stdio client: %v", err)
 	}
@@ -130,7 +137,7 @@ func assertCompiledMCPStdio(t *testing.T, ctx context.Context, binary, dsn strin
 func runMCPServer(t *testing.T, ctx context.Context, binary, dsn string, args ...string) (string, string, error) {
 	t.Helper()
 	command := exec.CommandContext(ctx, binary, args...)
-	command.Env = runtimeEnvironment(dsn)
+	command.Env = runtimeEnvironment(t, dsn)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -138,16 +145,72 @@ func runMCPServer(t *testing.T, ctx context.Context, binary, dsn string, args ..
 	return stdout.String(), stderr.String(), err
 }
 
-func runtimeEnvironment(dsn string) []string {
-	environment := make([]string, 0, len(os.Environ())+1)
+func runtimeEnvironment(t *testing.T, dsn string) []string {
+	t.Helper()
+	runtimeConfig, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("parse fixture DSN: %v", err)
+	}
+	if runtimeConfig.Net != "tcp" {
+		t.Fatalf("fixture network = %q, want tcp", runtimeConfig.Net)
+	}
+	host, port, err := net.SplitHostPort(runtimeConfig.Addr)
+	if err != nil {
+		t.Fatalf("split fixture address %q: %v", runtimeConfig.Addr, err)
+	}
+
+	environment := make([]string, 0, len(os.Environ())+5)
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if key == "MYSQL_DSN" || strings.HasPrefix(key, "MCP_") {
+		if key == "MYSQL_DSN" || strings.HasPrefix(key, "MYSQL_MCP_") || strings.HasPrefix(key, "MCP_") {
 			continue
 		}
 		environment = append(environment, entry)
 	}
-	return append(environment, "MYSQL_DSN="+dsn)
+	return append(environment,
+		"MYSQL_MCP_HOST="+host,
+		"MYSQL_MCP_DB_PORT="+port,
+		"MYSQL_MCP_USERNAME="+runtimeConfig.User,
+		"MYSQL_MCP_PASSWORD="+runtimeConfig.Passwd,
+		"MYSQL_MCP_DATABASE="+runtimeConfig.DBName,
+	)
+}
+
+func TestRuntimeEnvironmentSeparatesTCPDSNIntoMySQLMCPFields(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "legacy@tcp(127.0.0.1:3306)/legacy")
+	t.Setenv("MYSQL_MCP_HOST", "inherited-host")
+
+	rawConfig := mysqldriver.NewConfig()
+	rawConfig.User = "reader"
+	rawConfig.Passwd = "fixture-pass"
+	rawConfig.Net = "tcp"
+	rawConfig.Addr = "127.0.0.1:43306"
+	rawConfig.DBName = "inventory"
+	environment := environmentValues(runtimeEnvironment(t, rawConfig.FormatDSN()))
+
+	for key, want := range map[string]string{
+		"MYSQL_MCP_HOST":     "127.0.0.1",
+		"MYSQL_MCP_DB_PORT":  "43306",
+		"MYSQL_MCP_USERNAME": "reader",
+		"MYSQL_MCP_PASSWORD": "fixture-pass",
+		"MYSQL_MCP_DATABASE": "inventory",
+	} {
+		if got := environment[key]; got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if _, exists := environment["MYSQL_DSN"]; exists {
+		t.Fatalf("runtime environment retained MYSQL_DSN: %v", environment)
+	}
+}
+
+func environmentValues(entries []string) map[string]string {
+	values := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		key, value, _ := strings.Cut(entry, "=")
+		values[key] = value
+	}
+	return values
 }
 
 func assertMySQLToolsDiscovered(t *testing.T, tools []mcp.Tool) {

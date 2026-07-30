@@ -13,8 +13,6 @@ import (
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
-
-	"github.com/futuretea/mysql-mcp-server/pkg/core/config"
 )
 
 func TestMySQL8046Integration(t *testing.T) {
@@ -68,15 +66,8 @@ func integrationRuntimeDSN(t *testing.T, port string) string {
 	rawConfig.Net = "tcp"
 	rawConfig.Addr = "127.0.0.1:" + port
 	rawConfig.DBName = "mysql_mcp_test"
-	rawConfig.ParseTime = true
-	runtimeConfig, err := config.ParseMySQLRuntimeConfig(rawConfig.FormatDSN())
-	if err != nil {
-		t.Fatalf("normalize integration DSN: %v", err)
-	}
-	if strings.Contains(runtimeConfig.DSN, "parseTime=true") {
-		t.Fatalf("normalized runtime DSN retained parseTime=true")
-	}
-	return runtimeConfig.DSN
+	rawConfig.ParseTime = false
+	return rawConfig.FormatDSN()
 }
 
 func openIntegrationDatabase(t *testing.T, dsn string) *sql.DB {

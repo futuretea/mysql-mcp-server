@@ -17,29 +17,41 @@ type MySQLRuntimeConfig struct {
 	DSN string
 }
 
-// LoadMySQLRuntimeConfig loads the single MySQL DSN from its dedicated
-// environment variable. The DSN is not part of the static Viper config.
+// LoadMySQLRuntimeConfig loads MySQL connection fields from dedicated runtime
+// environment variables. The generated DSN is not part of the static Viper config.
 func LoadMySQLRuntimeConfig(getenv func(string) string) (MySQLRuntimeConfig, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
-	return ParseMySQLRuntimeConfig(getenv("MYSQL_DSN"))
-}
 
-// ParseMySQLRuntimeConfig validates a MySQL DSN and always disables ParseTime
-// so temporal results remain driver text values at the query encoding boundary.
-func ParseMySQLRuntimeConfig(dsn string) (MySQLRuntimeConfig, error) {
-	dsn = strings.TrimSpace(dsn)
-	if dsn == "" {
-		return MySQLRuntimeConfig{}, fmt.Errorf("MYSQL_DSN is required")
+	host := strings.TrimSpace(getenv("MYSQL_MCP_HOST"))
+	if host == "" {
+		host = "127.0.0.1"
 	}
 
-	parsed, err := mysqldriver.ParseDSN(dsn)
-	if err != nil {
-		return MySQLRuntimeConfig{}, fmt.Errorf("MYSQL_DSN is invalid")
+	port := strings.TrimSpace(getenv("MYSQL_MCP_DB_PORT"))
+	if port == "" {
+		port = "3306"
 	}
-	parsed.ParseTime = false
-	return MySQLRuntimeConfig{DSN: parsed.FormatDSN()}, nil
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return MySQLRuntimeConfig{}, fmt.Errorf("MYSQL_MCP_DB_PORT is invalid")
+	}
+
+	username := strings.TrimSpace(getenv("MYSQL_MCP_USERNAME"))
+	if username == "" {
+		return MySQLRuntimeConfig{}, fmt.Errorf("MYSQL_MCP_USERNAME is required")
+	}
+
+	connection := mysqldriver.NewConfig()
+	connection.User = username
+	connection.Passwd = getenv("MYSQL_MCP_PASSWORD")
+	connection.Net = "tcp"
+	connection.Addr = net.JoinHostPort(host, strconv.Itoa(portNumber))
+	connection.DBName = strings.TrimSpace(getenv("MYSQL_MCP_DATABASE"))
+	connection.ParseTime = false
+
+	return MySQLRuntimeConfig{DSN: connection.FormatDSN()}, nil
 }
 
 // StaticConfig contains configuration that is fixed when the server starts.
@@ -104,7 +116,7 @@ func LoadConfig(configPath string, v *viper.Viper) (*StaticConfig, error) {
 		}
 	}
 
-	v.SetEnvPrefix("MCP")
+	v.SetEnvPrefix("MYSQL_MCP")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	v.AutomaticEnv()
 

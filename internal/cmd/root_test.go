@@ -42,6 +42,8 @@ func TestRootWithoutArgsShowsHelp(t *testing.T) {
 }
 
 func TestToolsListAndCall(t *testing.T) {
+	clearMySQLMCPStaticConfigEnv(t)
+
 	var out bytes.Buffer
 	root := cmd.NewRootCommand(cmd.IOStreams{Out: &out, ErrOut: &out})
 	root.SetArgs([]string{"tools", "list"})
@@ -66,8 +68,14 @@ func TestToolsListAndCall(t *testing.T) {
 	}
 }
 
-func TestToolsCallReportsMissingMySQLDSN(t *testing.T) {
-	t.Setenv("MYSQL_DSN", "")
+func TestToolsCallReportsMissingMySQLUsername(t *testing.T) {
+	clearMySQLMCPStaticConfigEnv(t)
+	t.Setenv("MYSQL_DSN", "reader@tcp(127.0.0.1:1)/inventory")
+	t.Setenv("MYSQL_MCP_HOST", "127.0.0.1")
+	t.Setenv("MYSQL_MCP_DB_PORT", "3306")
+	t.Setenv("MYSQL_MCP_USERNAME", "")
+	t.Setenv("MYSQL_MCP_PASSWORD", "")
+	t.Setenv("MYSQL_MCP_DATABASE", "")
 
 	var out bytes.Buffer
 	var errOut bytes.Buffer
@@ -78,8 +86,25 @@ func TestToolsCallReportsMissingMySQLDSN(t *testing.T) {
 	if err == nil || err.Error() != "[mysql_configuration_unavailable] configuration unavailable" {
 		t.Fatalf("Execute() error = %v, want configuration unavailable", err)
 	}
-	if got, want := errOut.String(), "mysql runtime configuration unavailable: MYSQL_DSN is required\n"; got != want {
+	if got, want := errOut.String(), "mysql runtime configuration unavailable: MYSQL_MCP_USERNAME is required\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func clearMySQLMCPStaticConfigEnv(t *testing.T) {
+	t.Helper()
+
+	for _, key := range []string{
+		"MYSQL_MCP_PORT",
+		"MYSQL_MCP_LISTEN",
+		"MYSQL_MCP_SSE_BASE_URL",
+		"MYSQL_MCP_LOG_LEVEL",
+		"MYSQL_MCP_ENABLED_TOOLS",
+		"MYSQL_MCP_DISABLED_TOOLS",
+		"MYSQL_MCP_ENABLED_DOMAINS",
+		"MYSQL_MCP_DISABLED_DOMAINS",
+	} {
+		t.Setenv(key, "")
 	}
 }
 
@@ -96,6 +121,8 @@ func TestVersionCommand(t *testing.T) {
 }
 
 func TestToolsUnknownTool(t *testing.T) {
+	clearMySQLMCPStaticConfigEnv(t)
+
 	var out bytes.Buffer
 	root := cmd.NewRootCommand(cmd.IOStreams{Out: &out, ErrOut: &out})
 	root.SetArgs([]string{"tools", "describe", "missing-tool"})
@@ -113,6 +140,8 @@ func TestToolsUnknownTool(t *testing.T) {
 }
 
 func TestToolsRejectsNullParams(t *testing.T) {
+	clearMySQLMCPStaticConfigEnv(t)
+
 	var out bytes.Buffer
 	root := cmd.NewRootCommand(cmd.IOStreams{Out: &out, ErrOut: &out})
 	root.SetArgs([]string{"tools", "call", "mysql_get_server_info", "--params", "null"})
@@ -123,6 +152,8 @@ func TestToolsRejectsNullParams(t *testing.T) {
 }
 
 func TestCommandsReturnOutputErrors(t *testing.T) {
+	clearMySQLMCPStaticConfigEnv(t)
+
 	writeErr := errors.New("write failed")
 	tests := []struct {
 		name string
