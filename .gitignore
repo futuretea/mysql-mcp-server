@@ -2,7 +2,7 @@
 third-party-projects/
 
 # Build
-bin/
+/bin/
 dist/
 *.exe
 *.test
@@ -29,5 +29,6 @@ vendor/
 *.log
 
 # Local agent / auto-improve artifacts
+.auto-runs/
 .project/
 enhancements/
