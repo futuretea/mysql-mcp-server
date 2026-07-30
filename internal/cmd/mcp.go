@@ -64,9 +64,7 @@ func runServer(ctx context.Context, cfgFile string, streams IOStreams, v *viper.
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if cfg.Port == 0 {
-		logging.Disable()
-	} else if err := logging.Initialize(cfg.LogLevel, streams.ErrOut); err != nil {
+	if err := initializeServerLogging(cfg, streams); err != nil {
 		return fmt.Errorf("initialize logging: %w", err)
 	}
 	toolsets, release, runtimeErr := buildRuntimeToolsets()
@@ -86,4 +84,11 @@ func runServer(ctx context.Context, cfgFile string, streams IOStreams, v *viper.
 		return internalhttp.Serve(ctx, server, cfg)
 	}
 	return server.ServeStdio()
+}
+
+func initializeServerLogging(cfg *config.StaticConfig, streams IOStreams) error {
+	if cfg.Port == 0 {
+		return logging.InitializeStdio(cfg.LogLevel, streams.ErrOut)
+	}
+	return logging.Initialize(cfg.LogLevel, streams.ErrOut)
 }

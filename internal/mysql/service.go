@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"net"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/rs/zerolog/log"
 )
 
 type ErrorCode string
@@ -142,7 +144,7 @@ func (s *Service) GetServerInfo(ctx context.Context) (ServerInfo, error) {
 	var result ServerInfo
 	var current sql.NullString
 	if err := s.db.QueryRowContext(ctx, "SELECT VERSION(), @@version_comment, DATABASE()").Scan(&result.Version, &result.VersionComment, &current); err != nil {
-		return ServerInfo{}, databaseError(err)
+		return ServerInfo{}, databaseError("get_server_info.query", err)
 	}
 	if current.Valid {
 		result.CurrentDatabase = &current.String
@@ -153,7 +155,7 @@ func (s *Service) GetServerInfo(ctx context.Context) (ServerInfo, error) {
 func (s *Service) ListDatabases(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME")
 	if err != nil {
-		return nil, databaseError(err)
+		return nil, databaseError("list_databases.query", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -161,12 +163,12 @@ func (s *Service) ListDatabases(ctx context.Context) ([]string, error) {
 	for rows.Next() {
 		var database string
 		if err := rows.Scan(&database); err != nil {
-			return nil, codeError(CodeDatabase)
+			return nil, databaseError("list_databases.scan", err)
 		}
 		databases = append(databases, database)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, databaseError(err)
+		return nil, databaseError("list_databases.rows", err)
 	}
 	return databases, nil
 }
@@ -175,18 +177,18 @@ func (s *Service) ListTables(ctx context.Context, database string) (TablesResult
 	result := TablesResult{Database: database, Tables: make([]Table, 0)}
 	rows, err := s.db.QueryContext(ctx, "SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_NAME", database)
 	if err != nil {
-		return TablesResult{}, databaseError(err)
+		return TablesResult{}, databaseError("list_tables.query", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var table Table
 		if err := rows.Scan(&table.Name, &table.Type); err != nil {
-			return TablesResult{}, codeError(CodeDatabase)
+			return TablesResult{}, databaseError("list_tables.scan", err)
 		}
 		result.Tables = append(result.Tables, table)
 	}
 	if err := rows.Err(); err != nil {
-		return TablesResult{}, databaseError(err)
+		return TablesResult{}, databaseError("list_tables.rows", err)
 	}
 	return result, nil
 }
@@ -195,7 +197,7 @@ func (s *Service) DescribeTable(ctx context.Context, database, tableName string)
 	result := ColumnsResult{Database: database, Table: tableName, Columns: make([]Column, 0)}
 	rows, err := s.db.QueryContext(ctx, "SELECT ORDINAL_POSITION, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, EXTRA, COLUMN_COMMENT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION", database, tableName)
 	if err != nil {
-		return ColumnsResult{}, databaseError(err)
+		return ColumnsResult{}, databaseError("describe_table.query", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -203,7 +205,7 @@ func (s *Service) DescribeTable(ctx context.Context, database, tableName string)
 		var nullable string
 		var defaultValue sql.NullString
 		if err := rows.Scan(&column.OrdinalPosition, &column.Name, &column.ColumnType, &nullable, &defaultValue, &column.Key, &column.Extra, &column.Comment); err != nil {
-			return ColumnsResult{}, codeError(CodeDatabase)
+			return ColumnsResult{}, databaseError("describe_table.scan", err)
 		}
 		column.Nullable = nullable == "YES"
 		if defaultValue.Valid {
@@ -212,7 +214,7 @@ func (s *Service) DescribeTable(ctx context.Context, database, tableName string)
 		result.Columns = append(result.Columns, column)
 	}
 	if err := rows.Err(); err != nil {
-		return ColumnsResult{}, databaseError(err)
+		return ColumnsResult{}, databaseError("describe_table.rows", err)
 	}
 	return result, nil
 }
@@ -221,7 +223,7 @@ func (s *Service) ListIndexes(ctx context.Context, database, tableName string) (
 	result := IndexesResult{Database: database, Table: tableName, Indexes: make([]Index, 0)}
 	rows, err := s.db.QueryContext(ctx, "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, EXPRESSION, SUB_PART, COLLATION FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX", database, tableName)
 	if err != nil {
-		return IndexesResult{}, databaseError(err)
+		return IndexesResult{}, databaseError("list_indexes.query", err)
 	}
 	defer func() { _ = rows.Close() }()
 	indexes := map[string]int{}
@@ -232,7 +234,7 @@ func (s *Service) ListIndexes(ctx context.Context, database, tableName string) (
 		var columnName, expression, collation sql.NullString
 		var subPart sql.NullInt64
 		if err := rows.Scan(&name, &nonUnique, &part.SequenceInIndex, &columnName, &expression, &subPart, &collation); err != nil {
-			return IndexesResult{}, codeError(CodeDatabase)
+			return IndexesResult{}, databaseError("list_indexes.scan", err)
 		}
 		if columnName.Valid {
 			part.ColumnName = &columnName.String
@@ -256,7 +258,7 @@ func (s *Service) ListIndexes(ctx context.Context, database, tableName string) (
 		result.Indexes[position].KeyParts = append(result.Indexes[position].KeyParts, part)
 	}
 	if err := rows.Err(); err != nil {
-		return IndexesResult{}, databaseError(err)
+		return IndexesResult{}, databaseError("list_indexes.rows", err)
 	}
 	return result, nil
 }
@@ -267,23 +269,23 @@ func (s *Service) Query(ctx context.Context, query string) (QueryResult, error) 
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return QueryResult{}, databaseError(err)
+		return QueryResult{}, databaseError("query.begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
-		return QueryResult{}, databaseError(err)
+		return QueryResult{}, databaseError("query.execute", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	columnNames, err := rows.Columns()
 	if err != nil {
-		return QueryResult{}, codeError(CodeDatabase)
+		return QueryResult{}, databaseError("query.columns", err)
 	}
 	columnTypes, err := rows.ColumnTypes()
 	if err != nil {
-		return QueryResult{}, codeError(CodeDatabase)
+		return QueryResult{}, databaseError("query.column_types", err)
 	}
 	result := QueryResult{Columns: make([]QueryColumn, len(columnNames)), Rows: make([][]any, 0)}
 	for index, name := range columnNames {
@@ -296,7 +298,7 @@ func (s *Service) Query(ctx context.Context, query string) (QueryResult, error) 
 			targets[index] = &values[index]
 		}
 		if err := rows.Scan(targets...); err != nil {
-			return QueryResult{}, codeError(CodeDatabase)
+			return QueryResult{}, databaseError("query.scan", err)
 		}
 		encoded := make([]any, len(values))
 		for index, value := range values {
@@ -309,12 +311,12 @@ func (s *Service) Query(ctx context.Context, query string) (QueryResult, error) 
 		result.Rows = append(result.Rows, encoded)
 	}
 	if err := rows.Err(); err != nil {
-		return QueryResult{}, databaseError(err)
+		return QueryResult{}, databaseError("query.rows", err)
 	}
 	return result, nil
 }
 
-func databaseError(err error) error {
+func databaseError(operation string, err error) error {
 	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
 		return codeError(CodeConnectionFailed)
 	}
@@ -322,7 +324,19 @@ func databaseError(err error) error {
 	if errors.As(err, &networkError) {
 		return codeError(CodeConnectionFailed)
 	}
+	logDatabaseError(operation, err)
 	return codeError(CodeDatabase)
+}
+
+func logDatabaseError(operation string, err error) {
+	event := log.Error().Str("operation", operation)
+	var mysqlError *mysqldriver.MySQLError
+	if errors.As(err, &mysqlError) {
+		event = event.Uint16("mysql_error_number", mysqlError.Number).Str("mysql_sql_state", string(mysqlError.SQLState[:]))
+	} else {
+		event = event.Str("error_type", fmt.Sprintf("%T", err))
+	}
+	event.Msg("MySQL operation failed")
 }
 
 type unavailableService struct{}

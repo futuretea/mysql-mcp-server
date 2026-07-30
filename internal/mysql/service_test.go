@@ -1,12 +1,18 @@
 package mysql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"io"
+	"strings"
 	"testing"
+
+	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func TestServiceQueryUsesReadOnlyTransactionAndRollsBack(t *testing.T) {
@@ -82,6 +88,44 @@ func TestServiceDiscoveryUsesFixedQueriesAndBoundParameters(t *testing.T) {
 			}
 			assertCapturedQuery(t, conn, tt.wantQuery, tt.wantArgs)
 		})
+	}
+}
+
+func TestDatabaseErrorLogsSafeMySQLDiagnostic(t *testing.T) {
+	var output bytes.Buffer
+	previousLogger := log.Logger
+	previousLevel := zerolog.GlobalLevel()
+	log.Logger = zerolog.New(&output)
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	t.Cleanup(func() {
+		log.Logger = previousLogger
+		zerolog.SetGlobalLevel(previousLevel)
+	})
+
+	driverError := &mysqldriver.MySQLError{
+		Number:   1142,
+		SQLState: [5]byte{'4', '2', '0', '0', '0'},
+		Message:  "SELECT password FROM credentials",
+	}
+	err := databaseError("list_databases.query", driverError)
+	code, ok := CodeOf(err)
+	if !ok || code != CodeDatabase {
+		t.Fatalf("CodeOf(databaseError) = %q, %t; want database_error, true", code, ok)
+	}
+
+	text := output.String()
+	for _, want := range []string{
+		`"operation":"list_databases.query"`,
+		`"mysql_error_number":1142`,
+		`"mysql_sql_state":"42000"`,
+		`"message":"MySQL operation failed"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("log = %q, want %q", text, want)
+		}
+	}
+	if strings.Contains(text, driverError.Message) {
+		t.Fatalf("log leaked driver message: %q", text)
 	}
 }
 

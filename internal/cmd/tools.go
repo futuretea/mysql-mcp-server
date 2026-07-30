@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/futuretea/mysql-mcp-server/pkg/core/logging"
 	"github.com/futuretea/mysql-mcp-server/pkg/toolset"
 )
 
@@ -101,6 +102,9 @@ func newToolsCallCommand(streams IOStreams, cfgFile *string, v *viper.Viper) *co
 			cfg, err := loadCLIConfig(cmd, *cfgFile, v)
 			if err != nil {
 				return err
+			}
+			if err := logging.InitializeStdio(cfg.LogLevel, streams.ErrOut); err != nil {
+				return fmt.Errorf("initialize logging: %w", err)
 			}
 			params, err := parseToolParams(rawParams, paramsFile, cmd.InOrStdin())
 			if err != nil {
