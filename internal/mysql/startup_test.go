@@ -118,6 +118,78 @@ func TestNewServiceRejectsDangerousPrivileges(t *testing.T) {
 			"SHOW GRANTS FOR CURRENT_USER() USING `admin`@`%`, `nested`@`%`",
 		})
 	})
+
+	t.Run("dangerous privilege inherited through a mandatory role", func(t *testing.T) {
+		if showCurrentGrantsSQL != "SHOW GRANTS" {
+			t.Fatalf("initial grant probe = %q, want SHOW GRANTS without FOR", showCurrentGrantsSQL)
+		}
+		conn := newStartupConn([][]string{
+			{
+				"GRANT USAGE ON *.* TO `reader`@`%`",
+				"GRANT `ops`@`%` TO `reader`@`%`",
+			},
+			{
+				"GRANT USAGE ON *.* TO `reader`@`%`",
+				"GRANT FILE ON *.* TO `reader`@`%`",
+				"GRANT `ops`@`%` TO `reader`@`%`",
+			},
+		})
+		service, err := openStartupService(t, conn, false)
+		if service != nil {
+			t.Fatal("NewService returned a service for a mandatory role with FILE")
+		}
+		assertStartupCode(t, err, CodeUnsafeServiceRole)
+		assertStartupProbe(t, conn, []string{
+			"SHOW GRANTS",
+			"SHOW GRANTS FOR CURRENT_USER() USING `ops`@`%`",
+		})
+	})
+
+	t.Run("roles granted without spaces", func(t *testing.T) {
+		conn := newStartupConn([][]string{
+			{
+				"GRANT USAGE ON *.* TO `u1`@`localhost`",
+				"GRANT `r1`@`%`,`r2`@`%` TO `u1`@`localhost`",
+			},
+			{
+				"GRANT USAGE ON *.* TO `u1`@`localhost`",
+				"GRANT SHUTDOWN ON *.* TO `u1`@`localhost`",
+				"GRANT `r1`@`%`,`r2`@`%` TO `u1`@`localhost`",
+			},
+		})
+		service, err := openStartupService(t, conn, false)
+		if service != nil {
+			t.Fatal("NewService returned a service for a role list with SHUTDOWN")
+		}
+		assertStartupCode(t, err, CodeUnsafeServiceRole)
+		assertStartupProbe(t, conn, []string{
+			"SHOW GRANTS",
+			"SHOW GRANTS FOR CURRENT_USER() USING `r1`@`%`, `r2`@`%`",
+		})
+	})
+
+	t.Run("proxy impersonation", func(t *testing.T) {
+		conn := newStartupConn([][]string{{
+			"GRANT USAGE ON *.* TO `mcp`@`%`",
+			"GRANT PROXY ON `root`@`localhost` TO `mcp`@`%`",
+		}})
+		service, err := openStartupService(t, conn, false)
+		if service != nil {
+			t.Fatal("NewService returned a service for a PROXY grant")
+		}
+		assertStartupCode(t, err, CodeUnsafeServiceRole)
+	})
+
+	t.Run("anonymous proxy grant", func(t *testing.T) {
+		conn := newStartupConn([][]string{{
+			"GRANT PROXY ON ''@'' TO `root`@`localhost` WITH GRANT OPTION",
+		}})
+		service, err := openStartupService(t, conn, false)
+		if service != nil {
+			t.Fatal("NewService returned a service for an anonymous PROXY grant")
+		}
+		assertStartupCode(t, err, CodeUnsafeServiceRole)
+	})
 }
 
 func TestNewServiceAllowsUnsafePrivilegesWhenOptedIn(t *testing.T) {
@@ -207,6 +279,34 @@ func TestNewServiceOptOutDoesNotSkipOtherStartupFailures(t *testing.T) {
 		}
 		assertNoStartupOptOut(t, output.String())
 	})
+}
+
+func TestNewServiceStartsSafeMandatoryRoleWithoutOptOut(t *testing.T) {
+	output := captureStartupLog(t)
+	conn := newStartupConn([][]string{
+		{
+			"GRANT USAGE ON *.* TO `reader`@`%`",
+			"GRANT `audit`@`%` TO `reader`@`%`",
+		},
+		{
+			"GRANT USAGE ON *.* TO `reader`@`%`",
+			"GRANT SELECT ON `inventory`.* TO `reader`@`%`",
+			"GRANT `audit`@`%` TO `reader`@`%`",
+		},
+	})
+	service, err := openStartupService(t, conn, false)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if service == nil {
+		t.Fatal("NewService service = nil, want started service")
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	assertStartupProbe(t, conn, []string{
+		"SHOW GRANTS",
+		"SHOW GRANTS FOR CURRENT_USER() USING `audit`@`%`",
+	})
+	assertNoStartupOptOut(t, output.String())
 }
 
 func TestNewServiceAllowsDatabaseLevelPrivilegesWithoutAdministrativeGrants(t *testing.T) {

@@ -11,14 +11,17 @@ import (
 
 const startupRoleOptOutMessage = "database service role is not permitted; allow_unsafe_database_role is set, so the startup role check is skipped"
 
-const showCurrentGrantsSQL = "SHOW GRANTS FOR CURRENT_USER()"
+// showCurrentGrantsSQL is the initial probe. MySQL includes mandatory roles
+// only when SHOW GRANTS has no FOR clause. SHOW GRANTS FOR CURRENT_USER()
+// hides them, which would let a mandatory role carry FILE or SUPER past startup.
+const showCurrentGrantsSQL = "SHOW GRANTS"
 
 const maxRoleExpansions = 8
 
-// unsafePrivilegeNames are global administrative privileges rejected at startup.
+// unsafePrivilegeNames are administrative privileges rejected at startup.
 // Static names are the MySQL privilege spellings from SHOW GRANTS. Dynamic
 // names are the MySQL 8 privileges that replace SUPER or administer accounts,
-// server files, replication, backup, and server control.
+// server files, replication, backup, firewall, masking, and server control.
 var unsafePrivilegeNames = []string{
 	"SUPER",
 	"FILE",
@@ -28,6 +31,11 @@ var unsafePrivilegeNames = []string{
 	"CREATE USER",
 	"CREATE ROLE",
 	"DROP ROLE",
+	"CREATE TABLESPACE",
+	"PROXY",
+	"REPLICATION CLIENT",
+	"REPLICATION SLAVE",
+	"ALLOW_NONEXISTENT_DEFINER",
 	"APPLICATION_PASSWORD_ADMIN",
 	"AUDIT_ABORT_EXEMPT",
 	"AUDIT_ADMIN",
@@ -38,8 +46,11 @@ var unsafePrivilegeNames = []string{
 	"CLONE_ADMIN",
 	"CONNECTION_ADMIN",
 	"ENCRYPTION_KEY_ADMIN",
+	"FIREWALL_ADMIN",
 	"FIREWALL_EXEMPT",
+	"FIREWALL_USER",
 	"FLUSH_OPTIMIZER_COSTS",
+	"FLUSH_PRIVILEGES",
 	"FLUSH_STATUS",
 	"FLUSH_TABLES",
 	"FLUSH_USER_RESOURCES",
@@ -47,6 +58,7 @@ var unsafePrivilegeNames = []string{
 	"GROUP_REPLICATION_STREAM",
 	"INNODB_REDO_LOG_ARCHIVE",
 	"INNODB_REDO_LOG_ENABLE",
+	"MASKING_DICTIONARIES_ADMIN",
 	"PASSWORDLESS_USER_ADMIN",
 	"PERSIST_RO_VARIABLES_ADMIN",
 	"REPLICATION_APPLIER",
@@ -58,10 +70,14 @@ var unsafePrivilegeNames = []string{
 	"SESSION_VARIABLES_ADMIN",
 	"SET_ANY_DEFINER",
 	"SET_USER_ID",
+	"SKIP_QUERY_REWRITE",
 	"SYSTEM_USER",
 	"SYSTEM_VARIABLES_ADMIN",
 	"TABLE_ENCRYPTION_ADMIN",
 	"TELEMETRY_LOG_ADMIN",
+	"TP_CONNECTION_ADMIN",
+	"TRANSACTION_GTID_TAG",
+	"VERSION_TOKEN_ADMIN",
 	"XA_RECOVER_ADMIN",
 }
 
@@ -176,6 +192,8 @@ func showGrantsUsing(roles map[string]struct{}) (string, error) {
 		ordered = append(ordered, role)
 	}
 	sort.Strings(ordered)
+	// USING is valid only on SHOW GRANTS FOR user. Mandatory roles discovered
+	// by the initial SHOW GRANTS probe are included in this list.
 	return "SHOW GRANTS FOR CURRENT_USER() USING " + strings.Join(ordered, ", "), nil
 }
 
