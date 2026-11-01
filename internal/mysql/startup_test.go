@@ -190,6 +190,17 @@ func TestNewServiceRejectsDangerousPrivileges(t *testing.T) {
 		}
 		assertStartupCode(t, err, CodeUnsafeServiceRole)
 	})
+
+	t.Run("dangerous privilege on an account whose name changes length when uppercased", func(t *testing.T) {
+		conn := newStartupConn([][]string{{
+			"GRANT FILE ON *.* TO `kullanıcı`@`%`",
+		}})
+		service, err := openStartupService(t, conn, false)
+		if service != nil {
+			t.Fatal("NewService returned a service for FILE granted to a Unicode account")
+		}
+		assertStartupCode(t, err, CodeUnsafeServiceRole)
+	})
 }
 
 func TestNewServiceAllowsUnsafePrivilegesWhenOptedIn(t *testing.T) {
@@ -307,6 +318,49 @@ func TestNewServiceStartsSafeMandatoryRoleWithoutOptOut(t *testing.T) {
 		"SHOW GRANTS FOR CURRENT_USER() USING `audit`@`%`",
 	})
 	assertNoStartupOptOut(t, output.String())
+}
+
+func TestNewServiceParsesIdentifiersWhoseUppercaseFormChangesLength(t *testing.T) {
+	t.Run("column name", func(t *testing.T) {
+		conn := newStartupConn([][]string{{
+			"GRANT USAGE ON *.* TO `reader`@`%`",
+			"GRANT SELECT (`adı`, `şehir`) ON `inventory`.`sample` TO `reader`@`%`",
+		}})
+		service, err := openStartupService(t, conn, false)
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		if service == nil {
+			t.Fatal("NewService service = nil, want started service")
+		}
+		_ = service.Close()
+	})
+
+	t.Run("role name", func(t *testing.T) {
+		conn := newStartupConn([][]string{
+			{
+				"GRANT USAGE ON *.* TO `reader`@`%`",
+				"GRANT `kullanıcı`@`%` TO `reader`@`%`",
+			},
+			{
+				"GRANT USAGE ON *.* TO `reader`@`%`",
+				"GRANT SELECT ON `inventory`.* TO `reader`@`%`",
+				"GRANT `kullanıcı`@`%` TO `reader`@`%`",
+			},
+		})
+		service, err := openStartupService(t, conn, false)
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		if service == nil {
+			t.Fatal("NewService service = nil, want started service")
+		}
+		t.Cleanup(func() { _ = service.Close() })
+		assertStartupProbe(t, conn, []string{
+			"SHOW GRANTS",
+			"SHOW GRANTS FOR CURRENT_USER() USING `kullanıcı`@`%`",
+		})
+	})
 }
 
 func TestNewServiceAllowsDatabaseLevelPrivilegesWithoutAdministrativeGrants(t *testing.T) {

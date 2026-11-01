@@ -258,8 +258,10 @@ func indexKeywordOutsideQuotes(value, keyword string) int {
 	if keyword == "" || len(value) < len(keyword) {
 		return -1
 	}
-	upper := strings.ToUpper(value)
-	key := strings.ToUpper(keyword)
+	// Compare the ASCII keyword against the original bytes. Uppercasing the
+	// whole statement is unsafe: letters such as U+0131 grow or shrink under
+	// Unicode case mapping and the resulting string no longer shares indexes
+	// with value, which panics or skips the real ON/TO boundary.
 	inQuote := false
 	for i := 0; i < len(value); i++ {
 		if value[i] == '`' {
@@ -270,12 +272,32 @@ func indexKeywordOutsideQuotes(value, keyword string) int {
 			inQuote = !inQuote
 			continue
 		}
-		if inQuote || i+len(key) > len(value) || upper[i:i+len(key)] != key {
+		if inQuote || i+len(keyword) > len(value) || !asciiEqualFold(value[i:i+len(keyword)], keyword) {
 			continue
 		}
 		return i
 	}
 	return -1
+}
+
+func asciiEqualFold(value, keyword string) bool {
+	if len(value) != len(keyword) {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		a := value[i]
+		b := keyword[i]
+		if a >= 'a' && a <= 'z' {
+			a -= 'a' - 'A'
+		}
+		if b >= 'a' && b <= 'z' {
+			b -= 'a' - 'A'
+		}
+		if a != b {
+			return false
+		}
+	}
+	return true
 }
 
 func privilegesUnsafe(names []string, scope string) bool {
