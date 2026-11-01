@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -25,6 +27,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.LogLevel != "info" {
 		t.Fatalf("expected log_level info, got %q", cfg.LogLevel)
+	}
+	if cfg.AllowUnsafeDatabaseRole {
+		t.Fatal("AllowUnsafeDatabaseRole = true, want false")
 	}
 }
 
@@ -135,6 +140,47 @@ func TestGetListenAddress(t *testing.T) {
 				t.Fatalf("GetListenAddress() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadConfigAllowUnsafeDatabaseRoleFromEnvironmentAndFile(t *testing.T) {
+	clearStaticConfigEnv(t)
+	if err := os.Unsetenv("MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE"); err != nil {
+		t.Fatalf("unset allow_unsafe_database_role: %v", err)
+	}
+
+	t.Setenv("MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE", "true")
+	cfg, err := config.LoadConfig("", viper.New())
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !cfg.AllowUnsafeDatabaseRole {
+		t.Fatal("AllowUnsafeDatabaseRole = false, want true from MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE")
+	}
+
+	t.Setenv("MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE", "false")
+	cfg, err = config.LoadConfig("", viper.New())
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.AllowUnsafeDatabaseRole {
+		t.Fatal("AllowUnsafeDatabaseRole = true, want false")
+	}
+
+	if err := os.Unsetenv("MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE"); err != nil {
+		t.Fatalf("unset allow_unsafe_database_role: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := []byte("allow_unsafe_database_role: true\nlog_level: info\n")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err = config.LoadConfig(path, viper.New())
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !cfg.AllowUnsafeDatabaseRole {
+		t.Fatal("AllowUnsafeDatabaseRole = false, want true from config file")
 	}
 }
 
@@ -289,6 +335,7 @@ func clearStaticConfigEnv(t *testing.T) {
 		"DISABLED_TOOLS",
 		"ENABLED_DOMAINS",
 		"DISABLED_DOMAINS",
+		"ALLOW_UNSAFE_DATABASE_ROLE",
 	} {
 		t.Setenv("MYSQL_MCP_"+key, "")
 		t.Setenv("MCP_"+key, "")

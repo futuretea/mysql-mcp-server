@@ -22,7 +22,8 @@ func assertExternalEntryPoints(t *testing.T, ctx context.Context, dsn string) {
 	binary := buildMCPServerBinary(t, ctx)
 
 	assertCompiledCLIQuery(t, ctx, binary, dsn)
-	assertCompiledCLIRejectsQueryBeforeDatabaseAccess(t, ctx, binary)
+	assertCompiledCLIRejectsQuery(t, ctx, binary, dsn)
+	assertCompiledCLIRejectsUnreachableServer(t, ctx, binary)
 	assertCompiledMCPStdio(t, ctx, binary, dsn)
 }
 
@@ -53,7 +54,7 @@ func repositoryRoot(t *testing.T, ctx context.Context) string {
 
 func assertCompiledCLIQuery(t *testing.T, ctx context.Context, binary, dsn string) {
 	t.Helper()
-	stdout, stderr, err := runMCPServer(t, ctx, binary, dsn,
+	stdout, stderr, err := runMCPServer(t, ctx, binary, dsn, true,
 		"tools", "call", "mysql_query", "--params", `{"sql":"SELECT id, name FROM sample ORDER BY id"}`)
 	if err != nil {
 		t.Fatalf("compiled CLI valid query: %v\nstderr: %s", err, stderr)
@@ -66,9 +67,9 @@ func assertCompiledCLIQuery(t *testing.T, ctx context.Context, binary, dsn strin
 	}
 }
 
-func assertCompiledCLIRejectsQueryBeforeDatabaseAccess(t *testing.T, ctx context.Context, binary string) {
+func assertCompiledCLIRejectsQuery(t *testing.T, ctx context.Context, binary, dsn string) {
 	t.Helper()
-	stdout, stderr, err := runMCPServer(t, ctx, binary, unavailableMySQLDSN(t),
+	stdout, stderr, err := runMCPServer(t, ctx, binary, dsn, true,
 		"tools", "call", "mysql_query", "--params", `{"sql":"SELECT UUID_SHORT()"}`)
 	if err == nil {
 		t.Fatal("compiled CLI accepted a rejected query")
@@ -78,6 +79,21 @@ func assertCompiledCLIRejectsQueryBeforeDatabaseAccess(t *testing.T, ctx context
 	}
 	if stderr != "[mysql_query_rejected] query rejected\n" {
 		t.Fatalf("compiled CLI rejection = %q, want query_rejected", stderr)
+	}
+}
+
+func assertCompiledCLIRejectsUnreachableServer(t *testing.T, ctx context.Context, binary string) {
+	t.Helper()
+	stdout, stderr, err := runMCPServer(t, ctx, binary, unavailableMySQLDSN(t), false,
+		"tools", "call", "mysql_query", "--params", `{"sql":"SELECT UUID_SHORT()"}`)
+	if err == nil {
+		t.Fatal("compiled CLI started against an unreachable MySQL server")
+	}
+	if stdout != "" {
+		t.Fatalf("compiled CLI unreachable startup wrote stdout: %q", stdout)
+	}
+	if stderr != "[mysql_connection_failed] connection failed\n" {
+		t.Fatalf("compiled CLI unreachable startup = %q, want connection_failed", stderr)
 	}
 }
 
@@ -93,7 +109,7 @@ func unavailableMySQLDSN(t *testing.T) string {
 
 func assertCompiledMCPStdio(t *testing.T, ctx context.Context, binary, dsn string) {
 	t.Helper()
-	client, err := mcpclient.NewStdioMCPClient(binary, runtimeEnvironment(t, dsn), "mcp")
+	client, err := mcpclient.NewStdioMCPClient(binary, rootFixtureEnvironment(t, dsn), "mcp")
 	if err != nil {
 		t.Fatalf("start MCP stdio client: %v", err)
 	}
@@ -134,10 +150,14 @@ func assertCompiledMCPStdio(t *testing.T, ctx context.Context, binary, dsn strin
 	}
 }
 
-func runMCPServer(t *testing.T, ctx context.Context, binary, dsn string, args ...string) (string, string, error) {
+func runMCPServer(t *testing.T, ctx context.Context, binary, dsn string, allowUnsafeRole bool, args ...string) (string, string, error) {
 	t.Helper()
 	command := exec.CommandContext(ctx, binary, args...)
-	command.Env = runtimeEnvironment(t, dsn)
+	if allowUnsafeRole {
+		command.Env = rootFixtureEnvironment(t, dsn)
+	} else {
+		command.Env = runtimeEnvironment(t, dsn)
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -174,6 +194,13 @@ func runtimeEnvironment(t *testing.T, dsn string) []string {
 		"MYSQL_MCP_PASSWORD="+runtimeConfig.Passwd,
 		"MYSQL_MCP_DATABASE="+runtimeConfig.DBName,
 	)
+}
+
+func rootFixtureEnvironment(t *testing.T, dsn string) []string {
+	t.Helper()
+	// The disposable server is started as root. Opt out of the privilege
+	// rejection so the CLI and MCP smoke tests can exercise query behavior.
+	return append(runtimeEnvironment(t, dsn), "MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE=true")
 }
 
 func TestRuntimeEnvironmentSeparatesTCPDSNIntoMySQLMCPFields(t *testing.T) {

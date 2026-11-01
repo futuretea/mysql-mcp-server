@@ -67,8 +67,11 @@ func runServer(ctx context.Context, cfgFile string, streams IOStreams, v *viper.
 	if err := initializeServerLogging(cfg, streams); err != nil {
 		return fmt.Errorf("initialize logging: %w", err)
 	}
-	toolsets, release, runtimeErr := buildRuntimeToolsets()
+	toolsets, release, runtimeErr := buildRuntimeToolsets(ctx, cfg.AllowUnsafeDatabaseRole)
 	defer release()
+	if err := startupFailure(runtimeErr); err != nil {
+		return err
+	}
 	reportRuntimeConfigurationError(streams.ErrOut, runtimeErr)
 
 	server, err := mcpserver.NewServer(mcpserver.Configuration{

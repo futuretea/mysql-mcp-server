@@ -152,6 +152,7 @@ func TestToolHandlersReturnSafeFixedErrors(t *testing.T) {
 			want: "[mysql_database_error] database error",
 		},
 		{name: "result encoding", err: &internalmysql.Error{Code: internalmysql.CodeResultEncoding}, want: "[mysql_result_encoding_failed] result encoding failed"},
+		{name: "unsafe service role", err: &internalmysql.Error{Code: internalmysql.CodeUnsafeServiceRole}, want: "[mysql_unsafe_service_role] database service role is not permitted"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

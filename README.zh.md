@@ -49,7 +49,7 @@ export MYSQL_MCP_DATABASE='inventory'
 
 `mysql_query` 只接受一条解析后的读查询。它拒绝多语句、非查询语句、`INTO`、锁定读、用户变量赋值和已阻断的会话/文件函数。通过后查询在只读事务中执行，并始终回滚。
 
-这不能证明存储函数、UDF、视图或插件没有副作用。请使用最小权限账号，不授予 `EXECUTE`、`FILE`、`LOCK TABLES` 或管理权限。
+这不能证明存储函数、UDF、视图或插件没有副作用。请使用最小权限账号，不授予 `EXECUTE`、`FILE`、`LOCK TABLES` 或管理权限。启动时还会拒绝持有这些管理权限的服务账号，除非设置 `allow_unsafe_database_role`。见[服务账号](#服务账号)。
 
 ## CLI 命令
 
@@ -173,6 +173,22 @@ HTTP / SSE **无鉴权、无 TLS**。默认 `--listen 127.0.0.1`。仅在受信�
 | `MYSQL_MCP_USERNAME` | 必填的 MySQL 用户名 | 无 |
 | `MYSQL_MCP_PASSWORD` | 可选 MySQL 密码；不会写入日志或返回 | 无 |
 | `MYSQL_MCP_DATABASE` | 可选默认 MySQL database | 无 |
+| `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` | 只跳过启动时的危险权限拒绝 | `false` |
+
+### 服务账号
+
+进程连上 MySQL 之后、任何工具执行 SQL 之前，启动检查会读取当前账号的 `SHOW GRANTS`，包含通过角色继承的权限。账号具备下列任一权限时，进程以 `[mysql_unsafe_service_role]` 退出：
+
+- `SUPER`、`FILE`、`PROCESS`、`SHUTDOWN`、`RELOAD` 或 `CREATE USER`
+- `CREATE ROLE` 或 `DROP ROLE`
+- 全局 `ALL` 或 `ALL PRIVILEGES`（`ON *.*`）；它们包含上面的权限
+- 替代 `SUPER` 或用于管理服务器的 MySQL 8 动态权限，包括 `SYSTEM_VARIABLES_ADMIN`、`SESSION_VARIABLES_ADMIN`、`CONNECTION_ADMIN`、`SYSTEM_USER`、`ROLE_ADMIN`、`BINLOG_ADMIN`、`REPLICATION_SLAVE_ADMIN`、`SET_USER_ID`、`BACKUP_ADMIN`、`CLONE_ADMIN` 和 `FLUSH_TABLES`
+
+只有 `SELECT` 和 `USAGE` 的账号使用默认配置即可启动，不需要打开开关。
+
+`allow_unsafe_database_role` 默认为 `false`。只有在无法准备最小权限账号时，才在配置文件中设为 `true`，或导出 `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE=true`。服务会打一条警告并跳过这次权限拒绝。连接失败、权限探测失败以及其它启动检查仍然会阻止启动。查询仍在只读事务中执行，但只读事务约束不了 `FILE`、`SHUTDOWN`、`SUPER` 和上面的动态权限：该账号可以读取服务器文件、创建用户，或在语句之外控制服务器。只对你掌控的 MySQL 实例启用。
+
+stdio MCP 和 `tools call` 为了保持协议输出干净，日志只保留 error 级别。这条 opt-out 警告以 warn 级别发出，在默认 `info` 级别的 HTTP 模式中可见。
 
 ### 配置文件
 
@@ -187,6 +203,7 @@ enabled_tools: []
 disabled_tools: []
 enabled_domains: []
 disabled_domains: []
+allow_unsafe_database_role: false
 ```
 
 ```bash

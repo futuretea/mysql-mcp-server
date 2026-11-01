@@ -143,18 +143,7 @@ func codeError(code internalmysql.ErrorCode) error {
 }
 
 func publicError(err error) error {
-	code, ok := internalmysql.CodeOf(err)
-	if !ok {
-		code = internalmysql.CodeDatabase
-	}
-	messages := map[internalmysql.ErrorCode]string{
-		internalmysql.CodeConfigurationUnavailable: "[mysql_configuration_unavailable] configuration unavailable",
-		internalmysql.CodeConnectionFailed:         "[mysql_connection_failed] connection failed",
-		internalmysql.CodeQueryRejected:            "[mysql_query_rejected] query rejected",
-		internalmysql.CodeDatabase:                 "[mysql_database_error] database error",
-		internalmysql.CodeResultEncoding:           "[mysql_result_encoding_failed] result encoding failed",
-	}
-	return errors.New(messages[code])
+	return internalmysql.PublicError(err)
 }
 
 var _ toolset.Toolset = (*Toolset)(nil)

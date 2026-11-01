@@ -57,7 +57,9 @@ that is always rolled back.
 
 This is not proof that stored functions, UDFs, views, or plugins have no side
 effects. Use a least-privilege account; do not grant `EXECUTE`, `FILE`,
-`LOCK TABLES`, or administrative privileges.
+`LOCK TABLES`, or administrative privileges. Startup also rejects service
+accounts that hold those administrative privileges unless
+`allow_unsafe_database_role` is set. See [Service account](#service-account).
 
 ## CLI commands
 
@@ -181,6 +183,22 @@ Priority: **flags > environment variables > config file > defaults**.
 | `MYSQL_MCP_USERNAME` | Required MySQL username | none |
 | `MYSQL_MCP_PASSWORD` | Optional MySQL password; never logged or returned | none |
 | `MYSQL_MCP_DATABASE` | Optional default MySQL database | none |
+| `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` | Skip only the startup unsafe-privilege rejection | `false` |
+
+### Service account
+
+After the process connects, and before any tool runs SQL, startup reads `SHOW GRANTS` for the current account, including privileges inherited through roles. The process exits with `[mysql_unsafe_service_role]` when the account has any of:
+
+- `SUPER`, `FILE`, `PROCESS`, `SHUTDOWN`, `RELOAD`, or `CREATE USER`
+- `CREATE ROLE` or `DROP ROLE`
+- global `ALL` or `ALL PRIVILEGES` (`ON *.*`), which include the privileges above
+- MySQL 8 dynamic privileges that replace `SUPER` or administer the server, including `SYSTEM_VARIABLES_ADMIN`, `SESSION_VARIABLES_ADMIN`, `CONNECTION_ADMIN`, `SYSTEM_USER`, `ROLE_ADMIN`, `BINLOG_ADMIN`, `REPLICATION_SLAVE_ADMIN`, `SET_USER_ID`, `BACKUP_ADMIN`, `CLONE_ADMIN`, and `FLUSH_TABLES`
+
+An account that only has `SELECT` and `USAGE` starts with the default configuration. No opt-out is required.
+
+`allow_unsafe_database_role` defaults to `false`. Set it to `true` in the config file, or export `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE=true`, only when you cannot provision a least-privilege account. The server logs a warning and skips this privilege rejection. A refused connection, a failed grant probe, and every other startup check still stop startup. Queries still run in a read-only transaction, but that transaction does not constrain `FILE`, `SHUTDOWN`, `SUPER`, or the dynamic privileges above: the account can read server files, create users, or control the server outside the statement. Enable the option only for a MySQL instance you control.
+
+Stdio MCP and `tools call` keep logs at error level so protocol output stays intact. The opt-out warning is emitted at warn level and is visible in HTTP mode at the default `info` level.
 
 ### Config file
 
@@ -195,6 +213,7 @@ enabled_tools: []
 disabled_tools: []
 enabled_domains: []
 disabled_domains: []
+allow_unsafe_database_role: false
 ```
 
 ```bash

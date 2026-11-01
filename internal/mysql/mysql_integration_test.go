@@ -29,7 +29,7 @@ func TestMySQL8046Integration(t *testing.T) {
 	dsn := integrationRuntimeDSN(t, port)
 	db := openIntegrationDatabase(t, dsn)
 	seedIntegrationDatabase(t, ctx, db)
-	service := openIntegrationService(t, dsn)
+	service := openIntegrationService(t, ctx, dsn)
 
 	assertServerDiscovery(t, ctx, service)
 	assertQueryResult(t, ctx, service)
@@ -108,9 +108,11 @@ created_at DATETIME NOT NULL
 	}
 }
 
-func openIntegrationService(t *testing.T, dsn string) *Service {
+func openIntegrationService(t *testing.T, ctx context.Context, dsn string) *Service {
 	t.Helper()
-	service, err := NewService(dsn)
+	// The fixture account is root, so the unsafe-role rejection is opted out.
+	// Privilege acceptance is covered by the startup unit tests.
+	service, err := NewService(ctx, dsn, true)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
