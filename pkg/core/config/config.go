@@ -64,6 +64,10 @@ type StaticConfig struct {
 	DisabledTools   []string `mapstructure:"disabled_tools"`
 	EnabledDomains  []string `mapstructure:"enabled_domains"`
 	DisabledDomains []string `mapstructure:"disabled_domains"`
+
+	// AllowUnsafeDatabaseRole skips only the startup service-account privilege
+	// rejection. Connection and other startup checks still run.
+	AllowUnsafeDatabaseRole bool `mapstructure:"allow_unsafe_database_role"`
 }
 
 // Validate checks whether the configuration can be used to start the server.
@@ -95,14 +99,15 @@ func LoadConfig(configPath string, v *viper.Viper) (*StaticConfig, error) {
 	}
 
 	defaults := map[string]any{
-		"port":             0,
-		"listen":           "127.0.0.1",
-		"sse_base_url":     "",
-		"log_level":        "info",
-		"enabled_tools":    []string{},
-		"disabled_tools":   []string{},
-		"enabled_domains":  []string{},
-		"disabled_domains": []string{},
+		"port":                       0,
+		"listen":                     "127.0.0.1",
+		"sse_base_url":               "",
+		"log_level":                  "info",
+		"enabled_tools":              []string{},
+		"disabled_tools":             []string{},
+		"enabled_domains":            []string{},
+		"disabled_domains":           []string{},
+		"allow_unsafe_database_role": false,
 	}
 	for key, value := range defaults {
 		v.SetDefault(key, value)

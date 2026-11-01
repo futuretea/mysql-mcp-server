@@ -6,3 +6,6 @@ enabled_tools: []
 disabled_tools: []
 enabled_domains: []
 disabled_domains: []
+# Skip only the startup service-account privilege check. Leave false unless a
+# least-privilege account is unavailable. Also MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE.
+allow_unsafe_database_role: false

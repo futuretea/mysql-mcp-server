@@ -103,6 +103,7 @@ func clearMySQLMCPStaticConfigEnv(t *testing.T) {
 		"MYSQL_MCP_DISABLED_TOOLS",
 		"MYSQL_MCP_ENABLED_DOMAINS",
 		"MYSQL_MCP_DISABLED_DOMAINS",
+		"MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE",
 	} {
 		t.Setenv(key, "")
 	}

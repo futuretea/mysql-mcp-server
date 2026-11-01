@@ -42,7 +42,7 @@ func TestBuildRuntimeToolsetsUsesUnavailableServiceForInvalidMySQLRuntimeConfig(
 				t.Setenv(key, value)
 			}
 
-			toolsets, release, runtimeErr := buildRuntimeToolsets()
+			toolsets, release, runtimeErr := buildRuntimeToolsets(context.Background(), false)
 			defer release()
 			if runtimeErr == nil {
 				t.Fatal("buildRuntimeToolsets() error = nil, want invalid configuration")

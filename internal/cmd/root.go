@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"io"
 
@@ -91,16 +91,26 @@ func buildToolCatalog(cfg *config.StaticConfig) ([]toolset.ServerTool, error) {
 	return buildToolCatalogForToolsets(cfg, defaultToolsets())
 }
 
-func buildRuntimeToolsets() ([]toolset.Toolset, func(), error) {
+func buildRuntimeToolsets(ctx context.Context, allowUnsafeDatabaseRole bool) ([]toolset.Toolset, func(), error) {
 	runtimeConfig, err := config.LoadMySQLRuntimeConfig(nil)
 	if err != nil {
 		return defaultToolsets(), func() {}, err
 	}
-	service, err := internalmysql.NewService(runtimeConfig.DSN)
+	service, err := internalmysql.NewService(ctx, runtimeConfig.DSN, allowUnsafeDatabaseRole)
 	if err != nil {
-		return defaultToolsets(), func() {}, errors.New("MySQL driver initialization failed")
+		return nil, func() {}, err
 	}
 	return []toolset.Toolset{toolmysql.New(service)}, func() { _ = service.Close() }, nil
+}
+
+// startupFailure returns the caller-facing form of a MySQL startup error.
+// Configuration errors are not MySQL error codes and stay on the existing
+// unavailable-service path.
+func startupFailure(err error) error {
+	if _, ok := internalmysql.CodeOf(err); !ok {
+		return nil
+	}
+	return internalmysql.PublicError(err)
 }
 
 func reportRuntimeConfigurationError(out io.Writer, err error) {

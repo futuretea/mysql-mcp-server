@@ -110,8 +110,11 @@ func newToolsCallCommand(streams IOStreams, cfgFile *string, v *viper.Viper) *co
 			if err != nil {
 				return err
 			}
-			toolsets, release, runtimeErr := buildRuntimeToolsets()
+			toolsets, release, runtimeErr := buildRuntimeToolsets(cmd.Context(), cfg.AllowUnsafeDatabaseRole)
 			defer release()
+			if err := startupFailure(runtimeErr); err != nil {
+				return err
+			}
 			reportRuntimeConfigurationError(streams.ErrOut, runtimeErr)
 			tools, err := buildToolCatalogForToolsets(cfg, toolsets)
 			if err != nil {
