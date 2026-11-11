@@ -56,7 +56,7 @@ blocked session/file functions. Accepted queries run in a read-only transaction
 that is always rolled back.
 
 This is not proof that stored functions, UDFs, views, or plugins have no side
-effects. Use a least-privilege account. Startup rejects `EXECUTE`, `FILE`,
+effects. Use a least-privilege account. Startup rejects `EXECUTE`, schema-wide `ALL`, `FILE`,
 `SHOW_ROUTINE`, grants on the `mysql` schema, global `SELECT`, and other
 administrative privileges unless `allow_unsafe_database_role` is set. See
 [Service account](#service-account).
@@ -194,10 +194,13 @@ After the process connects, and before any tool runs SQL, startup reads `SHOW GR
 - `REPLICATION SLAVE` or `REPLICATION CLIENT`
 - `SHOW_ROUTINE` or `RESOURCE_GROUP_USER`
 - global `SELECT`, `ALL`, or `ALL PRIVILEGES` (`ON *.*`)
+- schema-wide `ALL` or `ALL PRIVILEGES` (`ON db.*`). MySQL stores `EXECUTE` on that database privilege row and `SHOW GRANTS` keeps the shorthand, so the word `EXECUTE` never appears. `ALL` on one table (`ON db.table`) does not include `EXECUTE`
 - any privilege on the `mysql` schema, including `SELECT` on `mysql.user`
-- MySQL 8 dynamic privileges that replace `SUPER` or administer the server, including `SYSTEM_VARIABLES_ADMIN`, `SESSION_VARIABLES_ADMIN`, `CONNECTION_ADMIN`, `TP_CONNECTION_ADMIN`, `SYSTEM_USER`, `ROLE_ADMIN`, `BINLOG_ADMIN`, `REPLICATION_SLAVE_ADMIN`, `SET_USER_ID`, `ALLOW_NONEXISTENT_DEFINER`, `BACKUP_ADMIN`, `CLONE_ADMIN`, `FLUSH_PRIVILEGES`, `FLUSH_TABLES`, `FIREWALL_ADMIN`, and `VERSION_TOKEN_ADMIN`
+- MySQL 8 dynamic privileges that replace `SUPER` or administer the server, including `SYSTEM_VARIABLES_ADMIN`, `SESSION_VARIABLES_ADMIN`, `CONNECTION_ADMIN`, `TP_CONNECTION_ADMIN`, `SYSTEM_USER`, `ROLE_ADMIN`, `BINLOG_ADMIN`, `REPLICATION_SLAVE_ADMIN`, `SET_USER_ID`, `ALLOW_NONEXISTENT_DEFINER`, `BACKUP_ADMIN`, `CLONE_ADMIN`, `FLUSH_PRIVILEGES`, `FLUSH_TABLES`, `FIREWALL_ADMIN`, `OPTIMIZE_LOCAL_TABLE`, and `VERSION_TOKEN_ADMIN`
 
-`USAGE` plus `SELECT` on an application schema starts with the default configuration. No opt-out is required. `SELECT` on `*.*` does not start: that grant includes the `mysql` grant tables.
+`USAGE` plus `SELECT` on an application schema starts with the default configuration. No opt-out is required. `SELECT` on `*.*` does not start: that grant includes the `mysql` grant tables. An expanded database privilege list that does not include `EXECUTE` also starts. A routine call then fails in MySQL rather than at startup.
+
+A view created by a DBA with `SQL SECURITY DEFINER` is published schema. An account that can `SELECT` the view can read its output, including a `mysql.user` count or a function result, without holding `EXECUTE`. Startup does not classify that body. For this account `VIEW_DEFINITION` is empty and `SHOW CREATE VIEW` is denied, so the check cannot tell a normal default-definer application view from one that publishes catalog data. Do not publish a definer view that exposes data the service account should not see. That boundary is not a substitute for rejecting `EXECUTE` or schema-wide `ALL`.
 
 Startup allows 5 seconds for the TCP connection and the grant probe. A server that does not answer in that time stops startup. `allow_unsafe_database_role` does not extend the deadline.
 

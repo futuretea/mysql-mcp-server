@@ -49,7 +49,7 @@ export MYSQL_MCP_DATABASE='inventory'
 
 `mysql_query` 只接受一条解析后的读查询。它拒绝多语句、非查询语句、`INTO`、锁定读、用户变量赋值和已阻断的会话/文件函数。通过后查询在只读事务中执行，并始终回滚。
 
-这不能证明存储函数、UDF、视图或插件没有副作用。请使用最小权限账号。除非设置 `allow_unsafe_database_role`，启动时会拒绝 `EXECUTE`、`FILE`、`SHOW_ROUTINE`、`mysql` 系统库上的授权、全局 `SELECT` 以及其它管理权限。见[服务账号](#服务账号)。
+这不能证明存储函数、UDF、视图或插件没有副作用。请使用最小权限账号。除非设置 `allow_unsafe_database_role`，启动时会拒绝 `EXECUTE`、库级 `ALL`、`FILE`、`SHOW_ROUTINE`、`mysql` 系统库上的授权、全局 `SELECT` 以及其它管理权限。见[服务账号](#服务账号)。
 
 ## CLI 命令
 
@@ -184,10 +184,13 @@ HTTP / SSE **无鉴权、无 TLS**。默认 `--listen 127.0.0.1`。仅在受信�
 - `REPLICATION SLAVE` 或 `REPLICATION CLIENT`
 - `SHOW_ROUTINE` 或 `RESOURCE_GROUP_USER`
 - 全局 `SELECT`、`ALL` 或 `ALL PRIVILEGES`（`ON *.*`）
+- 库级 `ALL` 或 `ALL PRIVILEGES`（`ON db.*`）。MySQL 把 `EXECUTE` 存在这条数据库权限记录里，`SHOW GRANTS` 仍显示缩写，语句里不会出现 `EXECUTE`。单表上的 `ALL`（`ON db.table`）不包含 `EXECUTE`
 - `mysql` 系统库上的任何权限，包括 `mysql.user` 上的 `SELECT`
-- 替代 `SUPER` 或用于管理服务器的 MySQL 8 动态权限，包括 `SYSTEM_VARIABLES_ADMIN`、`SESSION_VARIABLES_ADMIN`、`CONNECTION_ADMIN`、`TP_CONNECTION_ADMIN`、`SYSTEM_USER`、`ROLE_ADMIN`、`BINLOG_ADMIN`、`REPLICATION_SLAVE_ADMIN`、`SET_USER_ID`、`ALLOW_NONEXISTENT_DEFINER`、`BACKUP_ADMIN`、`CLONE_ADMIN`、`FLUSH_PRIVILEGES`、`FLUSH_TABLES`、`FIREWALL_ADMIN` 和 `VERSION_TOKEN_ADMIN`
+- 替代 `SUPER` 或用于管理服务器的 MySQL 8 动态权限，包括 `SYSTEM_VARIABLES_ADMIN`、`SESSION_VARIABLES_ADMIN`、`CONNECTION_ADMIN`、`TP_CONNECTION_ADMIN`、`SYSTEM_USER`、`ROLE_ADMIN`、`BINLOG_ADMIN`、`REPLICATION_SLAVE_ADMIN`、`SET_USER_ID`、`ALLOW_NONEXISTENT_DEFINER`、`BACKUP_ADMIN`、`CLONE_ADMIN`、`FLUSH_PRIVILEGES`、`FLUSH_TABLES`、`FIREWALL_ADMIN`、`OPTIMIZE_LOCAL_TABLE` 和 `VERSION_TOKEN_ADMIN`
 
-`USAGE` 加上应用库上的 `SELECT` 使用默认配置即可启动，不需要打开开关。`SELECT ON *.*` 不能启动，因为该授权包含 `mysql` 权限表。
+`USAGE` 加上应用库上的 `SELECT` 使用默认配置即可启动，不需要打开开关。`SELECT ON *.*` 不能启动，因为该授权包含 `mysql` 权限表。不含 `EXECUTE` 的展开数据库权限列表也可以启动，随后调用例程会在 MySQL 里失败，而不是在启动时失败。
+
+DBA 用 `SQL SECURITY DEFINER` 创建的视图属于已发布的 schema。能 `SELECT` 该视图的账号可以读到它的输出，包括 `mysql.user` 的计数或函数结果，即使自己没有 `EXECUTE`。启动检查不判断视图正文。对该账号而言 `VIEW_DEFINITION` 为空，`SHOW CREATE VIEW` 也被拒绝，因此检查无法区分普通的默认 DEFINER 应用视图和发布了目录数据的视图。不要发布服务账号不该看到的数据的 DEFINER 视图。这条边界不能代替对 `EXECUTE` 或库级 `ALL` 的拒绝。
 
 启动会给 TCP 连接和权限探测 5 秒。服务器在这段时间内没有响应就停止启动。`allow_unsafe_database_role` 不会延长这个时限。
 

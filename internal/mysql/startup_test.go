@@ -367,8 +367,8 @@ func TestNewServiceParsesIdentifiersWhoseUppercaseFormChangesLength(t *testing.T
 func TestNewServiceAllowsDatabaseLevelPrivilegesWithoutAdministrativeGrants(t *testing.T) {
 	conn := newStartupConn([][]string{{
 		"GRANT USAGE ON *.* TO `reader`@`%`",
-		"GRANT ALL PRIVILEGES ON `inventory`.* TO `reader`@`%`",
-		"GRANT SELECT, INSERT, UPDATE, DELETE ON `inventory archive`.* TO `reader`@`%`",
+		"GRANT ALL PRIVILEGES ON `inventory`.`items` TO `reader`@`%`",
+		"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, ALTER, CREATE TEMPORARY TABLES, LOCK TABLES, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EVENT, TRIGGER ON `inventory`.* TO `reader`@`%`",
 		"GRANT SELECT ON `inventory archive`.* TO `reader`@`%`",
 	}})
 	service, err := openStartupService(t, conn, false)
@@ -381,6 +381,50 @@ func TestNewServiceAllowsDatabaseLevelPrivilegesWithoutAdministrativeGrants(t *t
 	_ = service.Close()
 }
 
+func TestNewServiceRejectsSchemaWideAllBecauseItIncludesExecute(t *testing.T) {
+	grants := []string{
+		"GRANT ALL PRIVILEGES ON `appdb`.* TO `reader`@`%`",
+		"GRANT ALL ON `appdb`.* TO `reader`@`%`",
+		`GRANT ALL PRIVILEGES ON "appdb".* TO "reader"@"%"`,
+	}
+	for _, grant := range grants {
+		t.Run(grant, func(t *testing.T) {
+			conn := newStartupConn([][]string{{
+				"GRANT USAGE ON *.* TO `reader`@`%`",
+				grant,
+			}})
+			service, err := openStartupService(t, conn, false)
+			if service != nil {
+				t.Fatal("NewService returned a service for schema-wide ALL")
+			}
+			assertStartupCode(t, err, CodeUnsafeServiceRole)
+		})
+	}
+
+	t.Run("role", func(t *testing.T) {
+		conn := newStartupConn([][]string{
+			{
+				"GRANT USAGE ON *.* TO `reader`@`%`",
+				"GRANT `all_schema_role`@`%` TO `reader`@`%`",
+			},
+			{
+				"GRANT USAGE ON *.* TO `reader`@`%`",
+				"GRANT ALL PRIVILEGES ON `appdb`.* TO `reader`@`%`",
+				"GRANT `all_schema_role`@`%` TO `reader`@`%`",
+			},
+		})
+		service, err := openStartupService(t, conn, false)
+		if service != nil {
+			t.Fatal("NewService returned a service for a role with schema-wide ALL")
+		}
+		assertStartupCode(t, err, CodeUnsafeServiceRole)
+		assertStartupProbe(t, conn, []string{
+			showCurrentGrantsSQL,
+			"SHOW GRANTS FOR CURRENT_USER() USING `all_schema_role`@`%`",
+		})
+	})
+}
+
 func TestNewServiceRejectsCredentialRoutineAndExecuteGrants(t *testing.T) {
 	grants := []string{
 		"GRANT SHOW_ROUTINE ON *.* TO `reader`@`%`",
@@ -391,6 +435,7 @@ func TestNewServiceRejectsCredentialRoutineAndExecuteGrants(t *testing.T) {
 		"GRANT ALL PRIVILEGES ON `mysql`.* TO `reader`@`%`",
 		"GRANT SELECT (`authentication_string`) ON `mysql`.`user` TO `reader`@`%`",
 		"GRANT SELECT ON mysql.user TO `reader`@`%`",
+		"GRANT OPTIMIZE_LOCAL_TABLE ON *.* TO `reader`@`%`",
 	}
 	for _, grant := range grants {
 		t.Run(grant, func(t *testing.T) {

@@ -59,6 +59,7 @@ var unsafePrivilegeNames = []string{
 	"INNODB_REDO_LOG_ARCHIVE",
 	"INNODB_REDO_LOG_ENABLE",
 	"MASKING_DICTIONARIES_ADMIN",
+	"OPTIMIZE_LOCAL_TABLE",
 	"PASSWORDLESS_USER_ADMIN",
 	"PERSIST_RO_VARIABLES_ADMIN",
 	"REPLICATION_APPLIER",
@@ -329,16 +330,19 @@ func asciiEqualFold(value, keyword string) bool {
 }
 
 func privilegesUnsafe(names []string, scope string) bool {
-	schema, schemaOK := schemaOfScope(scope)
-	if schemaOK && strings.EqualFold(schema, "mysql") {
+	schema, schemaWide, global, scopeOK := scopeShape(scope)
+	if scopeOK && strings.EqualFold(schema, "mysql") {
 		return true
 	}
-	global := isGlobalScope(scope)
 	for _, name := range names {
 		base := privilegeBase(name)
 		switch base {
-		case "ALL", "ALL PRIVILEGES", "SELECT":
-			if global || !schemaOK {
+		case "ALL", "ALL PRIVILEGES":
+			if !scopeOK || global || schemaWide {
+				return true
+			}
+		case "SELECT":
+			if !scopeOK || global {
 				return true
 			}
 		default:
@@ -358,22 +362,23 @@ func privilegeBase(name string) string {
 	return name
 }
 
-func schemaOfScope(scope string) (string, bool) {
-	parts, ok := splitOutsideQuotes(strings.TrimSpace(scope), '.')
-	if !ok || len(parts) == 0 {
-		return "", false
-	}
-	return unquoteIdent(parts[0])
-}
-
-func isGlobalScope(scope string) bool {
-	parts, ok := splitOutsideQuotes(strings.TrimSpace(scope), '.')
-	if !ok || len(parts) != 2 {
-		return false
+func scopeShape(scope string) (schema string, schemaWide bool, global bool, ok bool) {
+	parts, splitOK := splitOutsideQuotes(strings.TrimSpace(scope), '.')
+	if !splitOK || len(parts) != 2 {
+		return "", false, false, false
 	}
 	left, leftOK := unquoteIdent(parts[0])
 	right, rightOK := unquoteIdent(parts[1])
-	return leftOK && rightOK && left == "*" && right == "*"
+	if !leftOK || !rightOK {
+		return "", false, false, false
+	}
+	if right == "*" && left == "*" {
+		return left, true, true, true
+	}
+	if right == "*" {
+		return left, true, false, true
+	}
+	return left, false, false, true
 }
 
 func unquoteIdent(token string) (string, bool) {

@@ -312,6 +312,9 @@ func assertLiveStartupPrivileges(t *testing.T, ctx context.Context, port string,
 	t.Helper()
 	const fixturePassword = "integration-fixture-pw"
 	execSQL(t, ctx, admin, "CREATE DATABASE IF NOT EXISTS startup_priv")
+	execSQL(t, ctx, admin, "CREATE TABLE IF NOT EXISTS startup_priv.items (id INT PRIMARY KEY)")
+	execSQL(t, ctx, admin, "DROP FUNCTION IF EXISTS startup_priv.user_count")
+	execSQL(t, ctx, admin, "CREATE FUNCTION startup_priv.user_count() RETURNS INT SQL SECURITY DEFINER READS SQL DATA RETURN (SELECT COUNT(*) FROM mysql.user)")
 	t.Cleanup(func() {
 		_, _ = admin.ExecContext(context.Background(), "DROP DATABASE IF EXISTS startup_priv")
 	})
@@ -329,6 +332,8 @@ func assertLiveStartupPrivileges(t *testing.T, ctx context.Context, port string,
 		{name: "sp_global_select", grant: "GRANT SELECT ON *.* TO 'sp_global_select'@'%'", wantErr: true},
 		{name: "sp_mysql", grant: "GRANT ALL PRIVILEGES ON mysql.* TO 'sp_mysql'@'%'", wantErr: true},
 		{name: "sp_file", grant: "GRANT FILE ON *.* TO 'sp_file'@'%'", wantErr: true},
+		{name: "sp_all_schema", grant: "GRANT ALL PRIVILEGES ON startup_priv.* TO 'sp_all_schema'@'%'", wantErr: true},
+		{name: "sp_all_table", grant: "GRANT ALL PRIVILEGES ON startup_priv.items TO 'sp_all_table'@'%'"},
 	}
 	for _, account := range accounts {
 		execSQL(t, ctx, admin, "DROP USER IF EXISTS '"+account.name+"'@'%'")
@@ -339,7 +344,7 @@ func assertLiveStartupPrivileges(t *testing.T, ctx context.Context, port string,
 			_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS '"+name+"'@'%'")
 		})
 		database := ""
-		if account.name == "sp_reader" {
+		if account.name == "sp_reader" || account.name == "sp_all_table" {
 			database = "startup_priv"
 		}
 		service, err := NewService(ctx, accountDSN(t, port, account.name, fixturePassword, database), false)
@@ -361,6 +366,55 @@ func assertLiveStartupPrivileges(t *testing.T, ctx context.Context, port string,
 		_ = service.Close()
 		if err != nil || len(result.Rows) != 1 {
 			t.Fatalf("%s query = %+v, %v", account.name, result, err)
+		}
+		if account.name == "sp_all_table" {
+			service, err = NewService(ctx, accountDSN(t, port, account.name, fixturePassword, "startup_priv"), false)
+			if err != nil {
+				t.Fatalf("table ALL NewService: %v", err)
+			}
+			_, err = service.Query(ctx, "SELECT startup_priv.user_count()")
+			_ = service.Close()
+			if err == nil {
+				t.Fatal("table ALL executed startup_priv.user_count")
+			}
+		}
+	}
+
+	execSQL(t, ctx, admin, "DROP ROLE IF EXISTS 'sp_all_role'")
+	execSQL(t, ctx, admin, "CREATE ROLE 'sp_all_role'")
+	execSQL(t, ctx, admin, "GRANT ALL PRIVILEGES ON startup_priv.* TO 'sp_all_role'")
+	execSQL(t, ctx, admin, "DROP USER IF EXISTS 'sp_all_role_user'@'%'")
+	execSQL(t, ctx, admin, "CREATE USER 'sp_all_role_user'@'%' IDENTIFIED BY '"+fixturePassword+"'")
+	execSQL(t, ctx, admin, "GRANT 'sp_all_role' TO 'sp_all_role_user'@'%'")
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS 'sp_all_role_user'@'%'")
+		_, _ = admin.ExecContext(context.Background(), "DROP ROLE IF EXISTS 'sp_all_role'")
+	})
+	service, err := NewService(ctx, accountDSN(t, port, "sp_all_role_user", fixturePassword, ""), false)
+	if service != nil {
+		_ = service.Close()
+		t.Fatal("role with schema-wide ALL started")
+	}
+	if code, ok := CodeOf(err); !ok || code != CodeUnsafeServiceRole {
+		t.Fatalf("schema ALL role CodeOf(err) = %s, %t", code, ok)
+	}
+
+	if _, err := admin.ExecContext(ctx, "CREATE USER 'sp_optimize'@'%' IDENTIFIED BY '"+fixturePassword+"'"); err != nil {
+		t.Fatalf("create sp_optimize: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS 'sp_optimize'@'%'")
+	})
+	if _, err := admin.ExecContext(ctx, "GRANT OPTIMIZE_LOCAL_TABLE ON *.* TO 'sp_optimize'@'%'"); err != nil {
+		t.Logf("server does not provide OPTIMIZE_LOCAL_TABLE: %v", err)
+	} else {
+		service, err = NewService(ctx, accountDSN(t, port, "sp_optimize", fixturePassword, ""), false)
+		if service != nil {
+			_ = service.Close()
+			t.Fatal("OPTIMIZE_LOCAL_TABLE started")
+		}
+		if code, ok := CodeOf(err); !ok || code != CodeUnsafeServiceRole {
+			t.Fatalf("OPTIMIZE_LOCAL_TABLE CodeOf(err) = %s, %t", code, ok)
 		}
 	}
 
@@ -390,11 +444,19 @@ func assertLiveStartupPrivileges(t *testing.T, ctx context.Context, port string,
 	t.Cleanup(func() {
 		_, _ = admin.ExecContext(context.Background(), "SET GLOBAL sql_mode = '"+originalMode+"'")
 	})
-	service, err := NewService(ctx, accountDSN(t, port, "sp_role", fixturePassword, ""), false)
+	service, err = NewService(ctx, accountDSN(t, port, "sp_role", fixturePassword, ""), false)
 	if err != nil {
 		t.Fatalf("ANSI quoted safe role NewService: %v", err)
 	}
 	_ = service.Close()
+	service, err = NewService(ctx, accountDSN(t, port, "sp_all_schema", fixturePassword, ""), false)
+	if service != nil {
+		_ = service.Close()
+		t.Fatal("ANSI quoted schema-wide ALL started")
+	}
+	if code, ok := CodeOf(err); !ok || code != CodeUnsafeServiceRole {
+		t.Fatalf("ANSI schema ALL CodeOf(err) = %s, %t", code, ok)
+	}
 
 	service, err = NewService(ctx, accountDSN(t, port, "sp_file", fixturePassword, ""), true)
 	if err != nil {
