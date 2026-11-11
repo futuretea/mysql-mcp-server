@@ -380,6 +380,92 @@ func TestNewServiceAllowsDatabaseLevelPrivilegesWithoutAdministrativeGrants(t *t
 	_ = service.Close()
 }
 
+func TestNewServiceRejectsCredentialRoutineAndExecuteGrants(t *testing.T) {
+	grants := []string{
+		"GRANT SHOW_ROUTINE ON *.* TO `reader`@`%`",
+		"GRANT RESOURCE_GROUP_USER ON *.* TO `reader`@`%`",
+		"GRANT EXECUTE ON *.* TO `reader`@`%`",
+		"GRANT EXECUTE ON FUNCTION `review_db`.`definer_count` TO `reader`@`%`",
+		"GRANT SELECT ON *.* TO `reader`@`%`",
+		"GRANT ALL PRIVILEGES ON `mysql`.* TO `reader`@`%`",
+		"GRANT SELECT (`authentication_string`) ON `mysql`.`user` TO `reader`@`%`",
+		"GRANT SELECT ON mysql.user TO `reader`@`%`",
+	}
+	for _, grant := range grants {
+		t.Run(grant, func(t *testing.T) {
+			conn := newStartupConn([][]string{{
+				"GRANT USAGE ON *.* TO `reader`@`%`",
+				grant,
+			}})
+			service, err := openStartupService(t, conn, false)
+			if service != nil {
+				t.Fatal("NewService returned a service for a credential, routine, or execute grant")
+			}
+			assertStartupCode(t, err, CodeUnsafeServiceRole)
+		})
+	}
+}
+
+func TestNewServiceAcceptsQuotedSafeRole(t *testing.T) {
+	quotes := []struct {
+		name  string
+		usage string
+		role  string
+		read  string
+		using string
+	}{
+		{
+			name:  "double",
+			usage: `GRANT USAGE ON *.* TO "reader"@"%"`,
+			role:  `GRANT "read_role"@"%" TO "reader"@"%"`,
+			read:  `GRANT SELECT ON "inventory".* TO "reader"@"%"`,
+			using: `SHOW GRANTS FOR CURRENT_USER() USING "read_role"@"%"`,
+		},
+		{
+			name:  "single",
+			usage: `GRANT USAGE ON *.* TO 'reader'@'%'`,
+			role:  `GRANT 'read_role'@'%' TO 'reader'@'%'`,
+			read:  `GRANT SELECT ON 'inventory'.* TO 'reader'@'%'`,
+			using: `SHOW GRANTS FOR CURRENT_USER() USING 'read_role'@'%'`,
+		},
+	}
+	for _, quote := range quotes {
+		t.Run(quote.name, func(t *testing.T) {
+			conn := newStartupConn([][]string{
+				{quote.usage, quote.role},
+				{quote.usage, quote.read, quote.role},
+			})
+			service, err := openStartupService(t, conn, false)
+			if err != nil {
+				t.Fatalf("NewService: %v", err)
+			}
+			if service == nil {
+				t.Fatal("NewService service = nil, want started service")
+			}
+			t.Cleanup(func() { _ = service.Close() })
+			assertStartupProbe(t, conn, []string{showCurrentGrantsSQL, quote.using})
+		})
+	}
+}
+
+func TestNewServiceRejectsDoubleQuotedDangerousRole(t *testing.T) {
+	conn := newStartupConn([][]string{
+		{
+			`GRANT USAGE ON *.* TO "reader"@"%"`,
+			`GRANT "file_role"@"%" TO "reader"@"%"`,
+		},
+		{
+			`GRANT FILE ON *.* TO "reader"@"%"`,
+			`GRANT "file_role"@"%" TO "reader"@"%"`,
+		},
+	})
+	service, err := openStartupService(t, conn, false)
+	if service != nil {
+		t.Fatal("NewService returned a service for a double-quoted FILE role")
+	}
+	assertStartupCode(t, err, CodeUnsafeServiceRole)
+}
+
 func openStartupService(t *testing.T, conn *startupConn, allowUnsafe bool) (*Service, error) {
 	t.Helper()
 	return newService(context.Background(), startupTestDSN, allowUnsafe, func(string) (*sql.DB, error) {
