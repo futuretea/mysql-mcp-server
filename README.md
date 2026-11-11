@@ -56,8 +56,10 @@ blocked session/file functions. Accepted queries run in a read-only transaction
 that is always rolled back.
 
 This is not proof that stored functions, UDFs, views, or plugins have no side
-effects. Use a least-privilege account; do not grant `EXECUTE`, `FILE`,
-`LOCK TABLES`, or administrative privileges.
+effects. Use a least-privilege account. Startup rejects `EXECUTE`, schema-wide `ALL`, `FILE`,
+`SHOW_ROUTINE`, grants on the `mysql` schema, global `SELECT`, and other
+administrative privileges unless `allow_unsafe_database_role` is set. See
+[Service account](#service-account).
 
 ## CLI commands
 
@@ -181,6 +183,30 @@ Priority: **flags > environment variables > config file > defaults**.
 | `MYSQL_MCP_USERNAME` | Required MySQL username | none |
 | `MYSQL_MCP_PASSWORD` | Optional MySQL password; never logged or returned | none |
 | `MYSQL_MCP_DATABASE` | Optional default MySQL database | none |
+| `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` | Skip only the startup unsafe-privilege rejection | `false` |
+
+### Service account
+
+After the process connects, and before any tool runs SQL, startup reads `SHOW GRANTS` for the current account. Plain `SHOW GRANTS` includes mandatory roles; `SHOW GRANTS FOR CURRENT_USER()` does not. Privileges inherited through those roles and through explicitly granted roles are expanded before any tool runs. The process exits with `[mysql_unsafe_service_role]` when the account has any of:
+
+- `SUPER`, `FILE`, `PROCESS`, `SHUTDOWN`, `RELOAD`, `CREATE USER`, `CREATE TABLESPACE`, or `PROXY`
+- `CREATE ROLE`, `DROP ROLE`, or `EXECUTE`
+- `REPLICATION SLAVE` or `REPLICATION CLIENT`
+- `SHOW_ROUTINE` or `RESOURCE_GROUP_USER`
+- global `SELECT`, `ALL`, or `ALL PRIVILEGES` (`ON *.*`)
+- schema-wide `ALL` or `ALL PRIVILEGES` (`ON db.*`). MySQL stores `EXECUTE` on that database privilege row and `SHOW GRANTS` keeps the shorthand, so the word `EXECUTE` never appears. `ALL` on one table (`ON db.table`) does not include `EXECUTE`
+- any privilege on the `mysql` schema, including `SELECT` on `mysql.user`
+- MySQL 8 dynamic privileges that replace `SUPER` or administer the server, including `SYSTEM_VARIABLES_ADMIN`, `SESSION_VARIABLES_ADMIN`, `CONNECTION_ADMIN`, `TP_CONNECTION_ADMIN`, `SYSTEM_USER`, `ROLE_ADMIN`, `BINLOG_ADMIN`, `REPLICATION_SLAVE_ADMIN`, `SET_USER_ID`, `ALLOW_NONEXISTENT_DEFINER`, `BACKUP_ADMIN`, `CLONE_ADMIN`, `FLUSH_PRIVILEGES`, `FLUSH_TABLES`, `FIREWALL_ADMIN`, `OPTIMIZE_LOCAL_TABLE`, and `VERSION_TOKEN_ADMIN`
+
+`USAGE` plus `SELECT` on an application schema starts with the default configuration. No opt-out is required. `SELECT` on `*.*` does not start: that grant includes the `mysql` grant tables. An expanded database privilege list that does not include `EXECUTE` also starts. A routine call then fails in MySQL rather than at startup.
+
+A view created by a DBA with `SQL SECURITY DEFINER` is published schema. An account that can `SELECT` the view can read its output, including a `mysql.user` count or a function result, without holding `EXECUTE`. Startup does not classify that body. For this account `VIEW_DEFINITION` is empty and `SHOW CREATE VIEW` is denied, so the check cannot tell a normal default-definer application view from one that publishes catalog data. Do not publish a definer view that exposes data the service account should not see. That boundary is not a substitute for rejecting `EXECUTE` or schema-wide `ALL`.
+
+Startup allows 5 seconds for the TCP connection and the grant probe. A server that does not answer in that time stops startup. `allow_unsafe_database_role` does not extend the deadline.
+
+`allow_unsafe_database_role` defaults to `false`. Set it to `true` in the config file, or export `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE=true`, only when you cannot provision a least-privilege account. The server logs a warning and skips this privilege rejection. A refused connection, a failed grant probe, a startup timeout, and every other startup check still stop startup. Queries still run in a read-only transaction, but that transaction does not constrain `FILE`, `SHUTDOWN`, `SUPER`, replication privileges, `PROXY`, `EXECUTE`, or the dynamic privileges above. Enable the option only for a MySQL instance you control.
+
+Stdio MCP and `tools call` keep logs at error level so protocol output stays intact. The opt-out warning is emitted at warn level and is visible in HTTP mode at the default `info` level.
 
 ### Config file
 
@@ -195,6 +221,7 @@ enabled_tools: []
 disabled_tools: []
 enabled_domains: []
 disabled_domains: []
+allow_unsafe_database_role: false
 ```
 
 ```bash

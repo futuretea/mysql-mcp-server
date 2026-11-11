@@ -20,7 +20,7 @@ func TestMySQL8046Integration(t *testing.T) {
 		t.Skip("set MYSQL_MCP_INTEGRATION=1 to run the disposable mysql:8.0.46 integration test")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("Docker is unavailable; unit tests provide the declared substitute verification")
+		t.Skip("Docker is unavailable")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -29,7 +29,7 @@ func TestMySQL8046Integration(t *testing.T) {
 	dsn := integrationRuntimeDSN(t, port)
 	db := openIntegrationDatabase(t, dsn)
 	seedIntegrationDatabase(t, ctx, db)
-	service := openIntegrationService(t, dsn)
+	service := openIntegrationService(t, ctx, dsn)
 
 	assertServerDiscovery(t, ctx, service)
 	assertQueryResult(t, ctx, service)
@@ -108,9 +108,10 @@ created_at DATETIME NOT NULL
 	}
 }
 
-func openIntegrationService(t *testing.T, dsn string) *Service {
+func openIntegrationService(t *testing.T, ctx context.Context, dsn string) *Service {
 	t.Helper()
-	service, err := NewService(dsn)
+	const optOutOfUnsafeRoleCheck = true
+	service, err := NewService(ctx, dsn, optOutOfUnsafeRoleCheck)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -267,4 +268,214 @@ func containsTableName(tables []Table, name string) bool {
 		}
 	}
 	return false
+}
+
+func TestStartupPrivilegesIntegration(t *testing.T) {
+	if os.Getenv("MYSQL_MCP_INTEGRATION") != "1" {
+		t.Skip("set MYSQL_MCP_INTEGRATION=1 to run the MySQL privilege integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	port, adminUser, adminPassword := integrationAdmin(t, ctx)
+	admin := openIntegrationDatabase(t, accountDSN(t, port, adminUser, adminPassword, ""))
+	assertLiveStartupPrivileges(t, ctx, port, admin)
+}
+
+func integrationAdmin(t *testing.T, ctx context.Context) (port, user, password string) {
+	t.Helper()
+	if port = os.Getenv("MYSQL_MCP_TEST_PORT"); port != "" {
+		user = os.Getenv("MYSQL_MCP_TEST_USER")
+		if user == "" {
+			user = "root"
+		}
+		return port, user, os.Getenv("MYSQL_MCP_TEST_PASSWORD")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("Docker is unavailable and MYSQL_MCP_TEST_PORT is unset")
+	}
+	return startMySQL8046Container(t, ctx), "root", ""
+}
+
+func accountDSN(t *testing.T, port, user, password, database string) string {
+	t.Helper()
+	cfg := mysqldriver.NewConfig()
+	cfg.User = user
+	cfg.Passwd = password
+	cfg.Net = "tcp"
+	cfg.Addr = "127.0.0.1:" + port
+	cfg.DBName = database
+	cfg.ParseTime = false
+	return cfg.FormatDSN()
+}
+
+func assertLiveStartupPrivileges(t *testing.T, ctx context.Context, port string, admin *sql.DB) {
+	t.Helper()
+	const fixturePassword = "integration-fixture-pw"
+	execSQL(t, ctx, admin, "CREATE DATABASE IF NOT EXISTS startup_priv")
+	execSQL(t, ctx, admin, "CREATE TABLE IF NOT EXISTS startup_priv.items (id INT PRIMARY KEY)")
+	execSQL(t, ctx, admin, "DROP FUNCTION IF EXISTS startup_priv.user_count")
+	execSQL(t, ctx, admin, "CREATE FUNCTION startup_priv.user_count() RETURNS INT SQL SECURITY DEFINER READS SQL DATA RETURN (SELECT COUNT(*) FROM mysql.user)")
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), "DROP DATABASE IF EXISTS startup_priv")
+	})
+
+	type account struct {
+		name    string
+		grant   string
+		wantErr bool
+	}
+	accounts := []account{
+		{name: "sp_reader", grant: "GRANT SELECT ON startup_priv.* TO 'sp_reader'@'%'"},
+		{name: "sp_show", grant: "GRANT SHOW_ROUTINE ON *.* TO 'sp_show'@'%'", wantErr: true},
+		{name: "sp_rg", grant: "GRANT RESOURCE_GROUP_USER ON *.* TO 'sp_rg'@'%'", wantErr: true},
+		{name: "sp_exec", grant: "GRANT EXECUTE ON *.* TO 'sp_exec'@'%'", wantErr: true},
+		{name: "sp_global_select", grant: "GRANT SELECT ON *.* TO 'sp_global_select'@'%'", wantErr: true},
+		{name: "sp_mysql", grant: "GRANT ALL PRIVILEGES ON mysql.* TO 'sp_mysql'@'%'", wantErr: true},
+		{name: "sp_file", grant: "GRANT FILE ON *.* TO 'sp_file'@'%'", wantErr: true},
+		{name: "sp_all_schema", grant: "GRANT ALL PRIVILEGES ON startup_priv.* TO 'sp_all_schema'@'%'", wantErr: true},
+		{name: "sp_all_table", grant: "GRANT ALL PRIVILEGES ON startup_priv.items TO 'sp_all_table'@'%'"},
+	}
+	for _, account := range accounts {
+		execSQL(t, ctx, admin, "DROP USER IF EXISTS '"+account.name+"'@'%'")
+		execSQL(t, ctx, admin, "CREATE USER '"+account.name+"'@'%' IDENTIFIED BY '"+fixturePassword+"'")
+		execSQL(t, ctx, admin, account.grant)
+		name := account.name
+		t.Cleanup(func() {
+			_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS '"+name+"'@'%'")
+		})
+		database := ""
+		if account.name == "sp_reader" || account.name == "sp_all_table" {
+			database = "startup_priv"
+		}
+		service, err := NewService(ctx, accountDSN(t, port, account.name, fixturePassword, database), false)
+		if account.wantErr {
+			if service != nil {
+				_ = service.Close()
+				t.Fatalf("%s started", account.name)
+			}
+			code, ok := CodeOf(err)
+			if !ok || code != CodeUnsafeServiceRole {
+				t.Fatalf("%s CodeOf(err) = %s, %t; want unsafe_service_role", account.name, code, ok)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s NewService: %v", account.name, err)
+		}
+		result, err := service.Query(ctx, "SELECT 1 AS ok")
+		_ = service.Close()
+		if err != nil || len(result.Rows) != 1 {
+			t.Fatalf("%s query = %+v, %v", account.name, result, err)
+		}
+		if account.name == "sp_all_table" {
+			service, err = NewService(ctx, accountDSN(t, port, account.name, fixturePassword, "startup_priv"), false)
+			if err != nil {
+				t.Fatalf("table ALL NewService: %v", err)
+			}
+			_, err = service.Query(ctx, "SELECT startup_priv.user_count()")
+			_ = service.Close()
+			if err == nil {
+				t.Fatal("table ALL executed startup_priv.user_count")
+			}
+		}
+	}
+
+	execSQL(t, ctx, admin, "DROP ROLE IF EXISTS 'sp_all_role'")
+	execSQL(t, ctx, admin, "CREATE ROLE 'sp_all_role'")
+	execSQL(t, ctx, admin, "GRANT ALL PRIVILEGES ON startup_priv.* TO 'sp_all_role'")
+	execSQL(t, ctx, admin, "DROP USER IF EXISTS 'sp_all_role_user'@'%'")
+	execSQL(t, ctx, admin, "CREATE USER 'sp_all_role_user'@'%' IDENTIFIED BY '"+fixturePassword+"'")
+	execSQL(t, ctx, admin, "GRANT 'sp_all_role' TO 'sp_all_role_user'@'%'")
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS 'sp_all_role_user'@'%'")
+		_, _ = admin.ExecContext(context.Background(), "DROP ROLE IF EXISTS 'sp_all_role'")
+	})
+	service, err := NewService(ctx, accountDSN(t, port, "sp_all_role_user", fixturePassword, ""), false)
+	if service != nil {
+		_ = service.Close()
+		t.Fatal("role with schema-wide ALL started")
+	}
+	if code, ok := CodeOf(err); !ok || code != CodeUnsafeServiceRole {
+		t.Fatalf("schema ALL role CodeOf(err) = %s, %t", code, ok)
+	}
+
+	if _, err := admin.ExecContext(ctx, "CREATE USER 'sp_optimize'@'%' IDENTIFIED BY '"+fixturePassword+"'"); err != nil {
+		t.Fatalf("create sp_optimize: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS 'sp_optimize'@'%'")
+	})
+	if _, err := admin.ExecContext(ctx, "GRANT OPTIMIZE_LOCAL_TABLE ON *.* TO 'sp_optimize'@'%'"); err != nil {
+		t.Logf("server does not provide OPTIMIZE_LOCAL_TABLE: %v", err)
+	} else {
+		service, err = NewService(ctx, accountDSN(t, port, "sp_optimize", fixturePassword, ""), false)
+		if service != nil {
+			_ = service.Close()
+			t.Fatal("OPTIMIZE_LOCAL_TABLE started")
+		}
+		if code, ok := CodeOf(err); !ok || code != CodeUnsafeServiceRole {
+			t.Fatalf("OPTIMIZE_LOCAL_TABLE CodeOf(err) = %s, %t", code, ok)
+		}
+	}
+
+	execSQL(t, ctx, admin, "DROP ROLE IF EXISTS 'sp_read_role'")
+	execSQL(t, ctx, admin, "CREATE ROLE 'sp_read_role'")
+	execSQL(t, ctx, admin, "GRANT SELECT ON startup_priv.* TO 'sp_read_role'")
+	execSQL(t, ctx, admin, "DROP USER IF EXISTS 'sp_role'@'%'")
+	execSQL(t, ctx, admin, "CREATE USER 'sp_role'@'%' IDENTIFIED BY '"+fixturePassword+"'")
+	execSQL(t, ctx, admin, "GRANT 'sp_read_role' TO 'sp_role'@'%'")
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS 'sp_role'@'%'")
+		_, _ = admin.ExecContext(context.Background(), "DROP ROLE IF EXISTS 'sp_read_role'")
+	})
+
+	var originalMode string
+	if err := admin.QueryRowContext(ctx, "SELECT @@GLOBAL.sql_mode").Scan(&originalMode); err != nil {
+		t.Fatalf("read sql_mode: %v", err)
+	}
+	ansiMode := originalMode
+	if !strings.Contains(ansiMode, "ANSI_QUOTES") {
+		if ansiMode != "" {
+			ansiMode += ","
+		}
+		ansiMode += "ANSI_QUOTES"
+	}
+	execSQL(t, ctx, admin, "SET GLOBAL sql_mode = '"+ansiMode+"'")
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), "SET GLOBAL sql_mode = '"+originalMode+"'")
+	})
+	service, err = NewService(ctx, accountDSN(t, port, "sp_role", fixturePassword, ""), false)
+	if err != nil {
+		t.Fatalf("ANSI quoted safe role NewService: %v", err)
+	}
+	_ = service.Close()
+	service, err = NewService(ctx, accountDSN(t, port, "sp_all_schema", fixturePassword, ""), false)
+	if service != nil {
+		_ = service.Close()
+		t.Fatal("ANSI quoted schema-wide ALL started")
+	}
+	if code, ok := CodeOf(err); !ok || code != CodeUnsafeServiceRole {
+		t.Fatalf("ANSI schema ALL CodeOf(err) = %s, %t", code, ok)
+	}
+
+	service, err = NewService(ctx, accountDSN(t, port, "sp_file", fixturePassword, ""), true)
+	if err != nil {
+		t.Fatalf("opt-out NewService: %v", err)
+	}
+	_ = service.Close()
+	service, err = NewService(ctx, accountDSN(t, port, "sp_reader", "wrong-password", "startup_priv"), true)
+	if err == nil {
+		_ = service.Close()
+		t.Fatal("opt-out accepted a bad password")
+	}
+	if code, _ := CodeOf(err); code == CodeUnsafeServiceRole {
+		t.Fatalf("bad password returned %s", code)
+	}
+}
+
+func execSQL(t *testing.T, ctx context.Context, db *sql.DB, query string) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, query); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
 }

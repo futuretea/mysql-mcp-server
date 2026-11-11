@@ -57,6 +57,23 @@ jobs:
       - name: Run tests
         run: make test
 
+  mysql-integration:
+    name: MySQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Query behavior and startup privileges
+        run: MYSQL_MCP_INTEGRATION=1 go test ./internal/mysql/ -count=1 -timeout 12m -run 'TestMySQL8046Integration|TestStartupPrivilegesIntegration'
+
   build:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

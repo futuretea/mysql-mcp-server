@@ -20,7 +20,32 @@ const (
 	CodeQueryRejected            ErrorCode = "query_rejected"
 	CodeDatabase                 ErrorCode = "database_error"
 	CodeResultEncoding           ErrorCode = "result_encoding_failed"
+	CodeUnsafeServiceRole        ErrorCode = "unsafe_service_role"
 )
+
+// publicErrorMessages are the only MySQL failure strings returned to CLI and MCP callers.
+var publicErrorMessages = map[ErrorCode]string{
+	CodeConfigurationUnavailable: "[mysql_configuration_unavailable] configuration unavailable",
+	CodeConnectionFailed:         "[mysql_connection_failed] connection failed",
+	CodeQueryRejected:            "[mysql_query_rejected] query rejected",
+	CodeDatabase:                 "[mysql_database_error] database error",
+	CodeResultEncoding:           "[mysql_result_encoding_failed] result encoding failed",
+	CodeUnsafeServiceRole:        "[mysql_unsafe_service_role] database service role is not permitted",
+}
+
+// PublicError maps an internal failure to a fixed caller-facing message.
+// Unknown errors use the database failure message and do not preserve driver text.
+func PublicError(err error) error {
+	code, ok := CodeOf(err)
+	if !ok {
+		code = CodeDatabase
+	}
+	message, ok := publicErrorMessages[code]
+	if !ok {
+		message = publicErrorMessages[CodeDatabase]
+	}
+	return errors.New(message)
+}
 
 // Error carries an internal failure category without preserving database input
 // or driver error text for public transports.
@@ -120,15 +145,35 @@ type Service struct {
 	db *sql.DB
 }
 
-func NewService(dsn string) (*Service, error) {
+// NewService opens one MySQL handle, connects, and verifies the service account
+// before any tool can run SQL. allowUnsafeDatabaseRole skips only the
+// unsafe-privilege rejection; connection and grant-probe failures still abort.
+func NewService(ctx context.Context, dsn string, allowUnsafeDatabaseRole bool) (*Service, error) {
+	return newService(ctx, dsn, allowUnsafeDatabaseRole, func(dsn string) (*sql.DB, error) {
+		return sql.Open("mysql", dsn)
+	})
+}
+
+func newService(ctx context.Context, dsn string, allowUnsafeDatabaseRole bool, open func(string) (*sql.DB, error)) (*Service, error) {
 	if dsn == "" {
 		return nil, codeError(CodeConfigurationUnavailable)
 	}
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if open == nil {
 		return nil, codeError(CodeConfigurationUnavailable)
 	}
-	return &Service{db: db}, nil
+	db, err := open(dsn)
+	if err != nil || db == nil {
+		return nil, codeError(CodeConfigurationUnavailable)
+	}
+	service := &Service{db: db}
+	if err := service.verifyStartup(ctx, allowUnsafeDatabaseRole); err != nil {
+		_ = service.Close()
+		return nil, err
+	}
+	return service, nil
 }
 
 func NewUnavailableService() ReadOnlyService { return unavailableService{} }
@@ -317,7 +362,7 @@ func (s *Service) Query(ctx context.Context, query string) (QueryResult, error) 
 }
 
 func databaseError(operation string, err error) error {
-	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
 		return codeError(CodeConnectionFailed)
 	}
 	var networkError net.Error

@@ -49,7 +49,7 @@ export MYSQL_MCP_DATABASE='inventory'
 
 `mysql_query` 只接受一条解析后的读查询。它拒绝多语句、非查询语句、`INTO`、锁定读、用户变量赋值和已阻断的会话/文件函数。通过后查询在只读事务中执行，并始终回滚。
 
-这不能证明存储函数、UDF、视图或插件没有副作用。请使用最小权限账号，不授予 `EXECUTE`、`FILE`、`LOCK TABLES` 或管理权限。
+这不能证明存储函数、UDF、视图或插件没有副作用。请使用最小权限账号。除非设置 `allow_unsafe_database_role`，启动时会拒绝 `EXECUTE`、库级 `ALL`、`FILE`、`SHOW_ROUTINE`、`mysql` 系统库上的授权、全局 `SELECT` 以及其它管理权限。见[服务账号](#服务账号)。
 
 ## CLI 命令
 
@@ -173,6 +173,30 @@ HTTP / SSE **无鉴权、无 TLS**。默认 `--listen 127.0.0.1`。仅在受信�
 | `MYSQL_MCP_USERNAME` | 必填的 MySQL 用户名 | 无 |
 | `MYSQL_MCP_PASSWORD` | 可选 MySQL 密码；不会写入日志或返回 | 无 |
 | `MYSQL_MCP_DATABASE` | 可选默认 MySQL database | 无 |
+| `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` | 只跳过启动时的危险权限拒绝 | `false` |
+
+### 服务账号
+
+进程连上 MySQL 之后、任何工具执行 SQL 之前，启动检查会读取当前账号的 `SHOW GRANTS`。不带 `FOR` 的 `SHOW GRANTS` 包含强制角色（mandatory roles）；`SHOW GRANTS FOR CURRENT_USER()` 不包含。这些角色以及显式授予的角色所继承的权限，会在任何工具执行 SQL 之前展开。账号具备下列任一权限时，进程以 `[mysql_unsafe_service_role]` 退出：
+
+- `SUPER`、`FILE`、`PROCESS`、`SHUTDOWN`、`RELOAD`、`CREATE USER`、`CREATE TABLESPACE` 或 `PROXY`
+- `CREATE ROLE`、`DROP ROLE` 或 `EXECUTE`
+- `REPLICATION SLAVE` 或 `REPLICATION CLIENT`
+- `SHOW_ROUTINE` 或 `RESOURCE_GROUP_USER`
+- 全局 `SELECT`、`ALL` 或 `ALL PRIVILEGES`（`ON *.*`）
+- 库级 `ALL` 或 `ALL PRIVILEGES`（`ON db.*`）。MySQL 把 `EXECUTE` 存在这条数据库权限记录里，`SHOW GRANTS` 仍显示缩写，语句里不会出现 `EXECUTE`。单表上的 `ALL`（`ON db.table`）不包含 `EXECUTE`
+- `mysql` 系统库上的任何权限，包括 `mysql.user` 上的 `SELECT`
+- 替代 `SUPER` 或用于管理服务器的 MySQL 8 动态权限，包括 `SYSTEM_VARIABLES_ADMIN`、`SESSION_VARIABLES_ADMIN`、`CONNECTION_ADMIN`、`TP_CONNECTION_ADMIN`、`SYSTEM_USER`、`ROLE_ADMIN`、`BINLOG_ADMIN`、`REPLICATION_SLAVE_ADMIN`、`SET_USER_ID`、`ALLOW_NONEXISTENT_DEFINER`、`BACKUP_ADMIN`、`CLONE_ADMIN`、`FLUSH_PRIVILEGES`、`FLUSH_TABLES`、`FIREWALL_ADMIN`、`OPTIMIZE_LOCAL_TABLE` 和 `VERSION_TOKEN_ADMIN`
+
+`USAGE` 加上应用库上的 `SELECT` 使用默认配置即可启动，不需要打开开关。`SELECT ON *.*` 不能启动，因为该授权包含 `mysql` 权限表。不含 `EXECUTE` 的展开数据库权限列表也可以启动，随后调用例程会在 MySQL 里失败，而不是在启动时失败。
+
+DBA 用 `SQL SECURITY DEFINER` 创建的视图属于已发布的 schema。能 `SELECT` 该视图的账号可以读到它的输出，包括 `mysql.user` 的计数或函数结果，即使自己没有 `EXECUTE`。启动检查不判断视图正文。对该账号而言 `VIEW_DEFINITION` 为空，`SHOW CREATE VIEW` 也被拒绝，因此检查无法区分普通的默认 DEFINER 应用视图和发布了目录数据的视图。不要发布服务账号不该看到的数据的 DEFINER 视图。这条边界不能代替对 `EXECUTE` 或库级 `ALL` 的拒绝。
+
+启动会给 TCP 连接和权限探测 5 秒。服务器在这段时间内没有响应就停止启动。`allow_unsafe_database_role` 不会延长这个时限。
+
+`allow_unsafe_database_role` 默认为 `false`。只有在无法准备最小权限账号时，才在配置文件中设为 `true`，或导出 `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE=true`。服务会打一条警告并跳过这次权限拒绝。连接失败、权限探测失败、启动超时以及其它启动检查仍然会阻止启动。查询仍在只读事务中执行，但只读事务约束不了 `FILE`、`SHUTDOWN`、`SUPER`、复制权限、`PROXY`、`EXECUTE` 和上面的动态权限。只对你掌控的 MySQL 实例启用。
+
+stdio MCP 和 `tools call` 为了保持协议输出干净，日志只保留 error 级别。这条 opt-out 警告以 warn 级别发出，在默认 `info` 级别的 HTTP 模式中可见。
 
 ### 配置文件
 
@@ -187,6 +211,7 @@ enabled_tools: []
 disabled_tools: []
 enabled_domains: []
 disabled_domains: []
+allow_unsafe_database_role: false
 ```
 
 ```bash
