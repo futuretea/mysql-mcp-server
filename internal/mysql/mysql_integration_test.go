@@ -322,21 +322,21 @@ func assertLiveStartupPrivileges(t *testing.T, ctx context.Context, port string,
 		wantErr bool
 	}
 	accounts := []account{
-		{name: "sp_reader", grant: "GRANT SELECT ON startup_priv.* TO 'sp_reader'@'127.0.0.1'"},
-		{name: "sp_show", grant: "GRANT SHOW_ROUTINE ON *.* TO 'sp_show'@'127.0.0.1'", wantErr: true},
-		{name: "sp_rg", grant: "GRANT RESOURCE_GROUP_USER ON *.* TO 'sp_rg'@'127.0.0.1'", wantErr: true},
-		{name: "sp_exec", grant: "GRANT EXECUTE ON *.* TO 'sp_exec'@'127.0.0.1'", wantErr: true},
-		{name: "sp_global_select", grant: "GRANT SELECT ON *.* TO 'sp_global_select'@'127.0.0.1'", wantErr: true},
-		{name: "sp_mysql", grant: "GRANT ALL PRIVILEGES ON mysql.* TO 'sp_mysql'@'127.0.0.1'", wantErr: true},
-		{name: "sp_file", grant: "GRANT FILE ON *.* TO 'sp_file'@'127.0.0.1'", wantErr: true},
+		{name: "sp_reader", grant: "GRANT SELECT ON startup_priv.* TO 'sp_reader'@'%'"},
+		{name: "sp_show", grant: "GRANT SHOW_ROUTINE ON *.* TO 'sp_show'@'%'", wantErr: true},
+		{name: "sp_rg", grant: "GRANT RESOURCE_GROUP_USER ON *.* TO 'sp_rg'@'%'", wantErr: true},
+		{name: "sp_exec", grant: "GRANT EXECUTE ON *.* TO 'sp_exec'@'%'", wantErr: true},
+		{name: "sp_global_select", grant: "GRANT SELECT ON *.* TO 'sp_global_select'@'%'", wantErr: true},
+		{name: "sp_mysql", grant: "GRANT ALL PRIVILEGES ON mysql.* TO 'sp_mysql'@'%'", wantErr: true},
+		{name: "sp_file", grant: "GRANT FILE ON *.* TO 'sp_file'@'%'", wantErr: true},
 	}
 	for _, account := range accounts {
-		execSQL(t, ctx, admin, "DROP USER IF EXISTS '"+account.name+"'@'127.0.0.1'")
-		execSQL(t, ctx, admin, "CREATE USER '"+account.name+"'@'127.0.0.1' IDENTIFIED BY '"+fixturePassword+"'")
+		execSQL(t, ctx, admin, "DROP USER IF EXISTS '"+account.name+"'@'%'")
+		execSQL(t, ctx, admin, "CREATE USER '"+account.name+"'@'%' IDENTIFIED BY '"+fixturePassword+"'")
 		execSQL(t, ctx, admin, account.grant)
 		name := account.name
 		t.Cleanup(func() {
-			_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS '"+name+"'@'127.0.0.1'")
+			_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS '"+name+"'@'%'")
 		})
 		database := ""
 		if account.name == "sp_reader" {
@@ -367,11 +367,11 @@ func assertLiveStartupPrivileges(t *testing.T, ctx context.Context, port string,
 	execSQL(t, ctx, admin, "DROP ROLE IF EXISTS 'sp_read_role'")
 	execSQL(t, ctx, admin, "CREATE ROLE 'sp_read_role'")
 	execSQL(t, ctx, admin, "GRANT SELECT ON startup_priv.* TO 'sp_read_role'")
-	execSQL(t, ctx, admin, "DROP USER IF EXISTS 'sp_role'@'127.0.0.1'")
-	execSQL(t, ctx, admin, "CREATE USER 'sp_role'@'127.0.0.1' IDENTIFIED BY '"+fixturePassword+"'")
-	execSQL(t, ctx, admin, "GRANT 'sp_read_role' TO 'sp_role'@'127.0.0.1'")
+	execSQL(t, ctx, admin, "DROP USER IF EXISTS 'sp_role'@'%'")
+	execSQL(t, ctx, admin, "CREATE USER 'sp_role'@'%' IDENTIFIED BY '"+fixturePassword+"'")
+	execSQL(t, ctx, admin, "GRANT 'sp_read_role' TO 'sp_role'@'%'")
 	t.Cleanup(func() {
-		_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS 'sp_role'@'127.0.0.1'")
+		_, _ = admin.ExecContext(context.Background(), "DROP USER IF EXISTS 'sp_role'@'%'")
 		_, _ = admin.ExecContext(context.Background(), "DROP ROLE IF EXISTS 'sp_read_role'")
 	})
 
