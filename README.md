@@ -56,9 +56,9 @@ blocked session/file functions. Accepted queries run in a read-only transaction
 that is always rolled back.
 
 This is not proof that stored functions, UDFs, views, or plugins have no side
-effects. Use a least-privilege account; do not grant `EXECUTE`, `FILE`,
-`LOCK TABLES`, or administrative privileges. Startup rejects administrative
-service privileges unless `allow_unsafe_database_role` is set. See
+effects. Use a least-privilege account. Startup rejects `EXECUTE`, `FILE`,
+`SHOW_ROUTINE`, grants on the `mysql` schema, global `SELECT`, and other
+administrative privileges unless `allow_unsafe_database_role` is set. See
 [Service account](#service-account).
 
 ## CLI commands
@@ -190,14 +190,18 @@ Priority: **flags > environment variables > config file > defaults**.
 After the process connects, and before any tool runs SQL, startup reads `SHOW GRANTS` for the current account. Plain `SHOW GRANTS` includes mandatory roles; `SHOW GRANTS FOR CURRENT_USER()` does not. Privileges inherited through those roles and through explicitly granted roles are expanded before any tool runs. The process exits with `[mysql_unsafe_service_role]` when the account has any of:
 
 - `SUPER`, `FILE`, `PROCESS`, `SHUTDOWN`, `RELOAD`, `CREATE USER`, `CREATE TABLESPACE`, or `PROXY`
-- `CREATE ROLE` or `DROP ROLE`
+- `CREATE ROLE`, `DROP ROLE`, or `EXECUTE`
 - `REPLICATION SLAVE` or `REPLICATION CLIENT`
-- global `ALL` or `ALL PRIVILEGES` (`ON *.*`), which include the privileges above
+- `SHOW_ROUTINE` or `RESOURCE_GROUP_USER`
+- global `SELECT`, `ALL`, or `ALL PRIVILEGES` (`ON *.*`)
+- any privilege on the `mysql` schema, including `SELECT` on `mysql.user`
 - MySQL 8 dynamic privileges that replace `SUPER` or administer the server, including `SYSTEM_VARIABLES_ADMIN`, `SESSION_VARIABLES_ADMIN`, `CONNECTION_ADMIN`, `TP_CONNECTION_ADMIN`, `SYSTEM_USER`, `ROLE_ADMIN`, `BINLOG_ADMIN`, `REPLICATION_SLAVE_ADMIN`, `SET_USER_ID`, `ALLOW_NONEXISTENT_DEFINER`, `BACKUP_ADMIN`, `CLONE_ADMIN`, `FLUSH_PRIVILEGES`, `FLUSH_TABLES`, `FIREWALL_ADMIN`, and `VERSION_TOKEN_ADMIN`
 
-An account that only has `SELECT` and `USAGE` starts with the default configuration. No opt-out is required.
+`USAGE` plus `SELECT` on an application schema starts with the default configuration. No opt-out is required. `SELECT` on `*.*` does not start: that grant includes the `mysql` grant tables.
 
-`allow_unsafe_database_role` defaults to `false`. Set it to `true` in the config file, or export `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE=true`, only when you cannot provision a least-privilege account. The server logs a warning and skips this privilege rejection. A refused connection, a failed grant probe, and every other startup check still stop startup. Queries still run in a read-only transaction, but that transaction does not constrain `FILE`, `SHUTDOWN`, `SUPER`, replication privileges, `PROXY`, or the dynamic privileges above: the account can read server files, read binary logs, impersonate another account, create users, or control the server outside the statement. Enable the option only for a MySQL instance you control.
+Startup allows 5 seconds for the TCP connection and the grant probe. A server that does not answer in that time stops startup. `allow_unsafe_database_role` does not extend the deadline.
+
+`allow_unsafe_database_role` defaults to `false`. Set it to `true` in the config file, or export `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE=true`, only when you cannot provision a least-privilege account. The server logs a warning and skips this privilege rejection. A refused connection, a failed grant probe, a startup timeout, and every other startup check still stop startup. Queries still run in a read-only transaction, but that transaction does not constrain `FILE`, `SHUTDOWN`, `SUPER`, replication privileges, `PROXY`, `EXECUTE`, or the dynamic privileges above. Enable the option only for a MySQL instance you control.
 
 Stdio MCP and `tools call` keep logs at error level so protocol output stays intact. The opt-out warning is emitted at warn level and is visible in HTTP mode at the default `info` level.
 

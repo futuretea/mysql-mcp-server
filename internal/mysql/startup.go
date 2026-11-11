@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -18,10 +19,8 @@ const showCurrentGrantsSQL = "SHOW GRANTS"
 
 const maxRoleExpansions = 8
 
-// unsafePrivilegeNames are administrative privileges rejected at startup.
-// Static names are the MySQL privilege spellings from SHOW GRANTS. Dynamic
-// names are the MySQL 8 privileges that replace SUPER or administer accounts,
-// server files, replication, backup, firewall, masking, and server control.
+var startupTimeout = 5 * time.Second
+
 var unsafePrivilegeNames = []string{
 	"SUPER",
 	"FILE",
@@ -31,6 +30,7 @@ var unsafePrivilegeNames = []string{
 	"CREATE USER",
 	"CREATE ROLE",
 	"DROP ROLE",
+	"EXECUTE",
 	"CREATE TABLESPACE",
 	"PROXY",
 	"REPLICATION CLIENT",
@@ -64,12 +64,14 @@ var unsafePrivilegeNames = []string{
 	"REPLICATION_APPLIER",
 	"REPLICATION_SLAVE_ADMIN",
 	"RESOURCE_GROUP_ADMIN",
+	"RESOURCE_GROUP_USER",
 	"ROLE_ADMIN",
 	"SENSITIVE_VARIABLES_OBSERVER",
 	"SERVICE_CONNECTION_ADMIN",
 	"SESSION_VARIABLES_ADMIN",
 	"SET_ANY_DEFINER",
 	"SET_USER_ID",
+	"SHOW_ROUTINE",
 	"SKIP_QUERY_REWRITE",
 	"SYSTEM_USER",
 	"SYSTEM_VARIABLES_ADMIN",
@@ -90,6 +92,12 @@ var unsafePrivileges = func() map[string]struct{} {
 }()
 
 func (s *Service) verifyStartup(ctx context.Context, allowUnsafeDatabaseRole bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return databaseError("startup.begin", err)
@@ -262,22 +270,42 @@ func indexKeywordOutsideQuotes(value, keyword string) int {
 	// whole statement is unsafe: letters such as U+0131 grow or shrink under
 	// Unicode case mapping and the resulting string no longer shares indexes
 	// with value, which panics or skips the real ON/TO boundary.
-	inQuote := false
-	for i := 0; i < len(value); i++ {
-		if value[i] == '`' {
-			if inQuote && i+1 < len(value) && value[i+1] == '`' {
-				i++
-				continue
-			}
-			inQuote = !inQuote
-			continue
+	var quote byte
+	for i := 0; i < len(value); {
+		if quote == 0 && i+len(keyword) <= len(value) && asciiEqualFold(value[i:i+len(keyword)], keyword) {
+			return i
 		}
-		if inQuote || i+len(keyword) > len(value) || !asciiEqualFold(value[i:i+len(keyword)], keyword) {
-			continue
+		next, nextQuote := advanceQuoted(value, i, quote)
+		if next <= i {
+			return -1
 		}
-		return i
+		i, quote = next, nextQuote
 	}
 	return -1
+}
+
+func identQuote(ch byte) bool {
+	return ch == '`' || ch == '"' || ch == '\''
+}
+
+func advanceQuoted(value string, i int, quote byte) (int, byte) {
+	if i >= len(value) {
+		return i, quote
+	}
+	ch := value[i]
+	if quote != 0 {
+		if ch == quote {
+			if i+1 < len(value) && value[i+1] == quote {
+				return i + 2, quote
+			}
+			return i + 1, 0
+		}
+		return i + 1, quote
+	}
+	if identQuote(ch) {
+		return i + 1, ch
+	}
+	return i + 1, 0
 }
 
 func asciiEqualFold(value, keyword string) bool {
@@ -301,15 +329,20 @@ func asciiEqualFold(value, keyword string) bool {
 }
 
 func privilegesUnsafe(names []string, scope string) bool {
+	schema, schemaOK := schemaOfScope(scope)
+	if schemaOK && strings.EqualFold(schema, "mysql") {
+		return true
+	}
 	global := isGlobalScope(scope)
 	for _, name := range names {
-		switch name {
-		case "ALL", "ALL PRIVILEGES":
-			if global {
+		base := privilegeBase(name)
+		switch base {
+		case "ALL", "ALL PRIVILEGES", "SELECT":
+			if global || !schemaOK {
 				return true
 			}
 		default:
-			if _, ok := unsafePrivileges[name]; ok {
+			if _, ok := unsafePrivileges[base]; ok {
 				return true
 			}
 		}
@@ -317,15 +350,63 @@ func privilegesUnsafe(names []string, scope string) bool {
 	return false
 }
 
+func privilegeBase(name string) string {
+	name = strings.TrimSpace(name)
+	if paren := strings.IndexByte(name, '('); paren >= 0 {
+		name = strings.TrimSpace(name[:paren])
+	}
+	return name
+}
+
+func schemaOfScope(scope string) (string, bool) {
+	parts, ok := splitOutsideQuotes(strings.TrimSpace(scope), '.')
+	if !ok || len(parts) == 0 {
+		return "", false
+	}
+	return unquoteIdent(parts[0])
+}
+
 func isGlobalScope(scope string) bool {
-	var normalized strings.Builder
-	for _, r := range scope {
-		if r == '`' || r == ' ' || r == '\t' {
+	parts, ok := splitOutsideQuotes(strings.TrimSpace(scope), '.')
+	if !ok || len(parts) != 2 {
+		return false
+	}
+	left, leftOK := unquoteIdent(parts[0])
+	right, rightOK := unquoteIdent(parts[1])
+	return leftOK && rightOK && left == "*" && right == "*"
+}
+
+func unquoteIdent(token string) (string, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", false
+	}
+	if !identQuote(token[0]) {
+		if strings.ContainsAny(token, " \t`'\"\\;") {
+			return "", false
+		}
+		return token, true
+	}
+	quote := token[0]
+	if len(token) < 2 || token[len(token)-1] != quote {
+		return "", false
+	}
+	var b strings.Builder
+	for i := 1; i < len(token)-1; i++ {
+		if token[i] == quote {
+			if i+1 >= len(token)-1 || token[i+1] != quote {
+				return "", false
+			}
+			b.WriteByte(quote)
+			i++
 			continue
 		}
-		normalized.WriteRune(r)
+		b.WriteByte(token[i])
 	}
-	return strings.EqualFold(normalized.String(), "*.*")
+	if b.Len() == 0 && token != string([]byte{quote, quote}) {
+		return "", false
+	}
+	return b.String(), true
 }
 
 func splitPrivileges(list string) ([]string, bool) {
@@ -358,40 +439,17 @@ func splitRoleSpecs(list string) ([]string, bool) {
 }
 
 func splitCommaList(list string) ([]string, bool) {
-	var parts []string
-	var current strings.Builder
-	inQuote := false
-	for i := 0; i < len(list); i++ {
-		ch := list[i]
-		if ch == '`' {
-			if inQuote && i+1 < len(list) && list[i+1] == '`' {
-				current.WriteString("``")
-				i++
-				continue
-			}
-			inQuote = !inQuote
-			current.WriteByte(ch)
-			continue
-		}
-		if ch == ',' && !inQuote {
-			part := strings.TrimSpace(current.String())
-			if part == "" {
-				return nil, false
-			}
-			parts = append(parts, part)
-			current.Reset()
-			continue
-		}
-		current.WriteByte(ch)
-	}
-	if inQuote {
+	parts, ok := splitOutsideQuotes(list, ',')
+	if !ok {
 		return nil, false
 	}
-	part := strings.TrimSpace(current.String())
-	if part == "" {
-		return nil, false
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, false
+		}
+		parts[i] = part
 	}
-	parts = append(parts, part)
 	return parts, true
 }
 
@@ -411,27 +469,23 @@ func validRoleSpec(token string) bool {
 func splitOutsideQuotes(token string, separator byte) ([]string, bool) {
 	var parts []string
 	var current strings.Builder
-	inQuote := false
-	for i := 0; i < len(token); i++ {
-		ch := token[i]
-		if ch == '`' {
-			if inQuote && i+1 < len(token) && token[i+1] == '`' {
-				current.WriteString("``")
-				i++
-				continue
-			}
-			inQuote = !inQuote
-			current.WriteByte(ch)
-			continue
-		}
-		if ch == separator && !inQuote {
+	var quote byte
+	for i := 0; i < len(token); {
+		if quote == 0 && token[i] == separator {
 			parts = append(parts, current.String())
 			current.Reset()
+			i++
 			continue
 		}
-		current.WriteByte(ch)
+		start := i
+		next, nextQuote := advanceQuoted(token, i, quote)
+		if next <= i {
+			return nil, false
+		}
+		current.WriteString(token[start:next])
+		i, quote = next, nextQuote
 	}
-	if inQuote {
+	if quote != 0 {
 		return nil, false
 	}
 	parts = append(parts, current.String())
@@ -439,16 +493,17 @@ func splitOutsideQuotes(token string, separator byte) ([]string, bool) {
 }
 
 func validQuotedIdent(token string) bool {
-	if len(token) < 2 || token[0] != '`' || token[len(token)-1] != '`' {
+	if len(token) < 2 || !identQuote(token[0]) || token[len(token)-1] != token[0] {
 		return false
 	}
+	quote := token[0]
 	inner := token[1 : len(token)-1]
 	if inner == "" {
 		return false
 	}
 	for i := 0; i < len(inner); i++ {
-		if inner[i] == '`' {
-			if i+1 >= len(inner) || inner[i+1] != '`' {
+		if inner[i] == quote {
+			if i+1 >= len(inner) || inner[i+1] != quote {
 				return false
 			}
 			i++

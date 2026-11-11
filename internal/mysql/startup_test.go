@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -448,6 +449,40 @@ func TestNewServiceAcceptsQuotedSafeRole(t *testing.T) {
 	}
 }
 
+func TestNewServiceBoundsStartupAndIgnoresOptOut(t *testing.T) {
+	previous := startupTimeout
+	startupTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { startupTimeout = previous })
+
+	conn := newStartupConn(nil)
+	conn.blockOnContext = true
+	start := time.Now()
+	service, err := openStartupService(t, conn, true)
+	if service != nil {
+		t.Fatal("NewService returned a service after the startup deadline")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("startup took %s", time.Since(start))
+	}
+	assertStartupCode(t, err, CodeConnectionFailed)
+}
+
+func TestNewServiceBoundsBlackholeDial(t *testing.T) {
+	previous := startupTimeout
+	startupTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { startupTimeout = previous })
+
+	start := time.Now()
+	service, err := NewService(context.Background(), "reader:pw@tcp(192.0.2.1:3306)/", true)
+	if service != nil {
+		t.Fatal("NewService returned a service for a blackholed address")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("dial took %s", elapsed)
+	}
+	assertStartupCode(t, err, CodeConnectionFailed)
+}
+
 func TestNewServiceRejectsDoubleQuotedDangerousRole(t *testing.T) {
 	conn := newStartupConn([][]string{
 		{
@@ -551,14 +586,15 @@ func (startupDriver) Open(string) (driver.Conn, error) {
 }
 
 type startupConn struct {
-	grantSets  [][]string
-	queries    []string
-	beginCalls int
-	rollbacks  int
-	closed     int
-	readOnly   bool
-	beginErr   error
-	queryErr   error
+	grantSets      [][]string
+	queries        []string
+	beginCalls     int
+	rollbacks      int
+	closed         int
+	readOnly       bool
+	blockOnContext bool
+	beginErr       error
+	queryErr       error
 }
 
 func (*startupConn) Prepare(string) (driver.Stmt, error) {
@@ -568,9 +604,13 @@ func (c *startupConn) Close() error { c.closed++; return nil }
 func (*startupConn) Begin() (driver.Tx, error) {
 	return nil, errors.New("Begin must not be called")
 }
-func (c *startupConn) BeginTx(_ context.Context, opts driver.TxOptions) (driver.Tx, error) {
+func (c *startupConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	c.beginCalls++
 	c.readOnly = opts.ReadOnly
+	if c.blockOnContext {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if c.beginErr != nil {
 		return nil, c.beginErr
 	}

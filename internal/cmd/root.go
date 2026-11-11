@@ -103,9 +103,6 @@ func buildRuntimeToolsets(ctx context.Context, allowUnsafeDatabaseRole bool) ([]
 	return []toolset.Toolset{toolmysql.New(service)}, func() { _ = service.Close() }, nil
 }
 
-// startupFailure returns the caller-facing form of a MySQL startup error.
-// Configuration errors are not MySQL error codes and stay on the existing
-// unavailable-service path.
 func startupFailure(err error) error {
 	if _, ok := internalmysql.CodeOf(err); !ok {
 		return nil

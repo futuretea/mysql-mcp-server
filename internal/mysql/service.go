@@ -362,7 +362,7 @@ func (s *Service) Query(ctx context.Context, query string) (QueryResult, error) 
 }
 
 func databaseError(operation string, err error) error {
-	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
 		return codeError(CodeConnectionFailed)
 	}
 	var networkError net.Error
