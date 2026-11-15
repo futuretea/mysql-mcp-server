@@ -11,6 +11,7 @@ import (
 	internalmysql "github.com/futuretea/mysql-mcp-server/internal/mysql"
 	"github.com/futuretea/mysql-mcp-server/internal/toolcatalog"
 	"github.com/futuretea/mysql-mcp-server/pkg/core/config"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/masking"
 	"github.com/futuretea/mysql-mcp-server/pkg/core/version"
 	"github.com/futuretea/mysql-mcp-server/pkg/toolset"
 	toolmysql "github.com/futuretea/mysql-mcp-server/pkg/toolset/mysql"
@@ -91,16 +92,30 @@ func buildToolCatalog(cfg *config.StaticConfig) ([]toolset.ServerTool, error) {
 	return buildToolCatalogForToolsets(cfg, defaultToolsets())
 }
 
-func buildRuntimeToolsets(ctx context.Context, allowUnsafeDatabaseRole bool) ([]toolset.Toolset, func(), error) {
+func buildRuntimeToolsets(ctx context.Context, cfg *config.StaticConfig) ([]toolset.Toolset, func(), error) {
+	allowUnsafe := false
+	policy := masking.Disabled()
+	if cfg != nil {
+		allowUnsafe = cfg.AllowUnsafeDatabaseRole
+		policy = cfg.Masking
+	}
 	runtimeConfig, err := config.LoadMySQLRuntimeConfig(nil)
 	if err != nil {
-		return defaultToolsets(), func() {}, err
+		return defaultToolsetsWith(policy), func() {}, err
 	}
-	service, err := internalmysql.NewService(ctx, runtimeConfig.DSN, allowUnsafeDatabaseRole)
+	service, err := internalmysql.NewService(ctx, runtimeConfig.DSN, allowUnsafe)
 	if err != nil {
 		return nil, func() {}, err
 	}
-	return []toolset.Toolset{toolmysql.New(service)}, func() { _ = service.Close() }, nil
+	created := toolmysql.New(service)
+	created.SetPolicy(policy)
+	return []toolset.Toolset{created}, func() { _ = service.Close() }, nil
+}
+
+func defaultToolsetsWith(policy masking.Policy) []toolset.Toolset {
+	created := toolmysql.New(internalmysql.NewUnavailableService())
+	created.SetPolicy(policy)
+	return []toolset.Toolset{created}
 }
 
 func startupFailure(err error) error {

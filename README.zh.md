@@ -231,6 +231,34 @@ pkg/toolset/             # Toolset 接口与过滤
 pkg/toolset/mysql/       # 六个 MySQL 工具和共享参数 decoder
 ```
 
+## 输出脱敏
+
+未配置 `masking`、省略 `enabled`，或 `enabled` 为 false 时，脱敏关闭。工具结果保持现有 JSON。将 `enabled` 设为 true 且至少配置一条规则后，才会脱敏。环境变量 `MYSQL_MCP_MASKING_JSON` 一旦存在，就整份替换 YAML 中的对象。空值会被拒绝。未设置该变量时，仍使用 YAML 对象。
+
+```yaml
+masking:
+  enabled: true
+  placeholder: "[masked]"
+  names: ["synthetic_field"]
+  name_patterns: ["token_.+"]
+  values: ["synthetic-token-value"]
+  value_patterns: ["sk_live_[0-9]+"]
+```
+
+```bash
+export MYSQL_MCP_MASKING_JSON='{"enabled":true,"names":["synthetic_field"],"values":["synthetic-token-value"]}'
+```
+
+名称规则匹配完整的列名、表名、索引名、库名，以及解码后的 JSON 对象键。匹配到的字符串替换为占位符。原来是文本或 base64 的 MySQL 单元格仍保留 `{"encoding","value"}`。匹配到的数字或其他非字符串变成 JSON `null`。本来就是 SQL `NULL` 的值仍是 `null`。因此结果里的 JSON `null` 可能是数据库 NULL，也可能是被隐去的值，JSON 类型也可能改变。
+
+值规则对原始文本做子串匹配，包括单字符字面量。替换只做一次，不会再搜索占位符。utf8 单元格里的 JSON 对象和数组会按 JSON 读取，包括转义后的键。标准 base64 单元格会先解码、再脱敏、再编码。看起来像 base64 的普通文本不会被解码。这不是对所有隐私、压缩数据或任意编码的识别。
+
+`schema_version` 和工具名是服务器固定字段，不参与脱敏。固定的公开错误文本不会被改写，所以一个很短的字面量如果也出现在错误句子或占位符里，仍可能看见它。保证的范围是：已配置的原始数据不会留在覆盖到的结果文本里。
+
+无效脱敏配置，包括 `enabled: true` 但没有任何规则，会使进程在启动时失败，错误是 `invalid masking config`，并且不会回显配置原文。超出长度或深度、JSON 重复键、两个名称脱敏后冲突，或不支持的单元格，会返回 `[mysql_masking_failed] result was not returned`。发往数据库的命令不变。
+
+HTTP 调试日志记录路由类别（`mcp`、`sse`、`message` 或 `other`），不记录原始路径或查询字符串。脱敏过程不会把源值写入日志。
+
 ## 运行限制
 
 本切片有意不增加查询超时、行数限制、响应大小限制或并发预算。服务应只放在受信网络；HTTP 和 SSE 没有内置认证或 TLS 终止。

@@ -342,6 +342,41 @@ func clearStaticConfigEnv(t *testing.T) {
 	}
 }
 
+func TestLoadConfigMaskingPrecedence(t *testing.T) {
+	clearStaticConfigEnv(t)
+	if err := os.Unsetenv("MYSQL_MCP_MASKING_JSON"); err != nil {
+		t.Fatal(err)
+	}
+	secret := "synthetic-token-value"
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := []byte("masking:\n  enabled: true\n  names: [\"synthetic_field\"]\nlog_level: info\n")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(path, viper.New())
+	if err != nil || !cfg.Masking.Enabled() || !cfg.Masking.MatchName("synthetic_field") {
+		t.Fatalf("file policy enabled=%v err=%v", cfg.Masking.Enabled(), err)
+	}
+
+	t.Setenv("MYSQL_MCP_MASKING_JSON", `{"enabled":false,"values":["`+secret+`"]}`)
+	cfg, err = config.LoadConfig(path, viper.New())
+	if err != nil || cfg.Masking.Enabled() {
+		t.Fatalf("env replacement enabled=%v err=%v", cfg.Masking.Enabled(), err)
+	}
+
+	t.Setenv("MYSQL_MCP_MASKING_JSON", " {\"enabled\":true,\"extra\":\""+secret+"\"} ")
+	_, err = config.LoadConfig(path, viper.New())
+	if err == nil || err.Error() != "invalid masking config" || strings.Contains(err.Error(), secret) {
+		t.Fatalf("invalid masking error = %v", err)
+	}
+
+	t.Setenv("MYSQL_MCP_MASKING_JSON", " ")
+	_, err = config.LoadConfig("", viper.New())
+	if err == nil || err.Error() != "invalid masking config" {
+		t.Fatalf("empty masking env error = %v", err)
+	}
+}
+
 func parseRuntimeDSN(t *testing.T, dsn string) *mysqldriver.Config {
 	t.Helper()
 

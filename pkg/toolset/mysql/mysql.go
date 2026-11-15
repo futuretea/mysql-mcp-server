@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	internalmysql "github.com/futuretea/mysql-mcp-server/internal/mysql"
+	"github.com/futuretea/mysql-mcp-server/pkg/core/masking"
 	"github.com/futuretea/mysql-mcp-server/pkg/toolset"
 )
 
@@ -28,10 +29,19 @@ var requiredParams = map[string][]string{
 // Toolset exposes the MySQL read-only MCP tools.
 type Toolset struct {
 	service internalmysql.ReadOnlyService
+	policy  masking.Policy
 }
 
 func New(service internalmysql.ReadOnlyService) *Toolset {
-	return &Toolset{service: service}
+	return &Toolset{service: service, policy: masking.Disabled()}
+}
+
+// SetPolicy installs the startup masking policy. Handlers read it when called.
+func (t *Toolset) SetPolicy(policy masking.Policy) {
+	if t == nil {
+		return
+	}
+	t.policy = policy
 }
 
 func (t *Toolset) GetName() string { return Domain }
@@ -76,7 +86,7 @@ func (t *Toolset) getServerInfo(ctx context.Context, params map[string]any) (str
 		return "", err
 	}
 	data, err := t.service.GetServerInfo(ctx)
-	return encodeResponse("mysql_get_server_info", data, err)
+	return t.encodeResponse("mysql_get_server_info", data, err)
 }
 
 func (t *Toolset) listDatabases(ctx context.Context, params map[string]any) (string, error) {
@@ -84,7 +94,7 @@ func (t *Toolset) listDatabases(ctx context.Context, params map[string]any) (str
 		return "", err
 	}
 	databases, err := t.service.ListDatabases(ctx)
-	return encodeResponse("mysql_list_databases", map[string]any{"databases": databases}, err)
+	return t.encodeResponse("mysql_list_databases", map[string]any{"databases": databases}, err)
 }
 
 func (t *Toolset) listTables(ctx context.Context, params map[string]any) (string, error) {
@@ -93,7 +103,7 @@ func (t *Toolset) listTables(ctx context.Context, params map[string]any) (string
 		return "", err
 	}
 	data, err := t.service.ListTables(ctx, decoded["database"])
-	return encodeResponse("mysql_list_tables", data, err)
+	return t.encodeResponse("mysql_list_tables", data, err)
 }
 
 func (t *Toolset) describeTable(ctx context.Context, params map[string]any) (string, error) {
@@ -102,7 +112,7 @@ func (t *Toolset) describeTable(ctx context.Context, params map[string]any) (str
 		return "", err
 	}
 	data, err := t.service.DescribeTable(ctx, decoded["database"], decoded["table"])
-	return encodeResponse("mysql_describe_table", data, err)
+	return t.encodeResponse("mysql_describe_table", data, err)
 }
 
 func (t *Toolset) listIndexes(ctx context.Context, params map[string]any) (string, error) {
@@ -111,7 +121,7 @@ func (t *Toolset) listIndexes(ctx context.Context, params map[string]any) (strin
 		return "", err
 	}
 	data, err := t.service.ListIndexes(ctx, decoded["database"], decoded["table"])
-	return encodeResponse("mysql_list_indexes", data, err)
+	return t.encodeResponse("mysql_list_indexes", data, err)
 }
 
 func (t *Toolset) query(ctx context.Context, params map[string]any) (string, error) {
@@ -120,12 +130,18 @@ func (t *Toolset) query(ctx context.Context, params map[string]any) (string, err
 		return "", err
 	}
 	data, err := t.service.Query(ctx, decoded["sql"])
-	return encodeResponse("mysql_query", data, err)
+	return t.encodeResponse("mysql_query", data, err)
 }
 
-func encodeResponse(toolName string, data any, err error) (string, error) {
+func (t *Toolset) encodeResponse(toolName string, data any, err error) (string, error) {
 	if err != nil {
 		return "", publicError(err)
+	}
+	if t.policy.Enabled() {
+		data, err = t.maskData(data)
+		if err != nil {
+			return "", errors.New(resultMaskedMessage)
+		}
 	}
 	payload, err := json.Marshal(struct {
 		SchemaVersion int    `json:"schema_version"`
