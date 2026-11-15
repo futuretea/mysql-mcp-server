@@ -10,6 +10,8 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
+
+	"github.com/futuretea/mysql-mcp-server/pkg/core/masking"
 )
 
 // MySQLRuntimeConfig contains the runtime-only MySQL connection setting.
@@ -68,6 +70,9 @@ type StaticConfig struct {
 	// AllowUnsafeDatabaseRole skips only the startup service-account privilege
 	// rejection. Connection and other startup checks still run.
 	AllowUnsafeDatabaseRole bool `mapstructure:"allow_unsafe_database_role"`
+
+	// Masking is parsed separately so unknown masking fields fail closed.
+	Masking masking.Policy `mapstructure:"-"`
 }
 
 // Validate checks whether the configuration can be used to start the server.
@@ -140,7 +145,22 @@ func LoadConfig(configPath string, v *viper.Viper) (*StaticConfig, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	policy, err := loadMaskingPolicy(v)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Masking = policy
 	return cfg, nil
+}
+
+func loadMaskingPolicy(v *viper.Viper) (masking.Policy, error) {
+	if raw, ok := os.LookupEnv("MYSQL_MCP_MASKING_JSON"); ok {
+		return masking.ParseJSON(raw)
+	}
+	if v == nil || !v.InConfig("masking") {
+		return masking.Disabled(), nil
+	}
+	return masking.ParseRaw(v.Get("masking"))
 }
 
 func normalizeStringSlice(values []string) []string {

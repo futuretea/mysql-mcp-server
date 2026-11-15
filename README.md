@@ -241,6 +241,34 @@ pkg/toolset/              # Toolset interface and filters
 pkg/toolset/mysql/        # six MySQL tool definitions and shared parameter decoder
 ```
 
+## Output masking
+
+Masking is off when the `masking` object is absent, when `enabled` is omitted, or when `enabled` is false. Tool results then keep their current JSON. Set `enabled` to true and at least one rule to mask configured data. `MYSQL_MCP_MASKING_JSON` replaces the whole YAML object when the variable is present. An empty value is rejected. Unset leaves the YAML object in place.
+
+```yaml
+masking:
+  enabled: true
+  placeholder: "[masked]"
+  names: ["synthetic_field"]
+  name_patterns: ["token_.+"]
+  values: ["synthetic-token-value"]
+  value_patterns: ["sk_live_[0-9]+"]
+```
+
+```bash
+export MYSQL_MCP_MASKING_JSON='{"enabled":true,"names":["synthetic_field"],"values":["synthetic-token-value"]}'
+```
+
+Name rules match a whole column, table, index, or database name, and a decoded JSON object key. The pattern is parsed before it is anchored, so a fragment such as `a)|(b` is rejected instead of matching a prefix or a suffix. A value pattern uses RE2 leftmost-first matching and does not look for a longer alternative. A matched string becomes the placeholder and keeps a MySQL `{"encoding","value"}` cell when the cell was text or base64. A matched number or other non-string becomes JSON `null`. An existing SQL `NULL` stays `null`. A JSON `null` in a masked result can therefore be either a database NULL or a redacted value, and the JSON type can change.
+
+Value rules are substring matches on the original text, including one-character literals. They run once and do not search the placeholder. A pattern is rejected when any alternative can match without consuming a character, such as a word-boundary branch. JSON objects and arrays stored in utf8 cells are read as JSON, including escaped keys. A value rule that hits a JSON number or bool, or a MySQL integer or float cell, replaces that whole value with null and does not splice the digits. An unmatched number keeps its original text. Standard base64 cells are decoded, masked, and encoded again, including a value pattern that matches an ASCII secret next to invalid UTF-8. Ordinary prose that looks like base64 is not decoded. One result shares a node and output budget. This is not a detector for every private value, compressed payload, or encoding.
+
+`schema_version` and the tool name are server constants and are not masked. Fixed public errors are not rewritten, so a short literal that also occurs in an error sentence or in the placeholder can still appear there. The guarantee is that the original configured data is removed from the covered result text.
+
+Invalid masking configuration, including `enabled: true` with no rules, stops startup with `invalid masking config` and does not echo the document. A result that exceeds a bound, has duplicate JSON keys, has two masked names that collide, or has an unsupported cell fails with `[mysql_masking_failed] result was not returned`. The database command is unchanged.
+
+HTTP debug logs record a route class (`mcp`, `sse`, `message`, or `other`) instead of the raw path or query. The masker does not write the source value to a log.
+
 ## Operational limits
 
 This slice deliberately does not impose query timeouts, row limits, response

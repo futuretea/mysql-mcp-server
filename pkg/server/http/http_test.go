@@ -1,13 +1,17 @@
 package http_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	internalmysql "github.com/futuretea/mysql-mcp-server/internal/mysql"
 	"github.com/futuretea/mysql-mcp-server/pkg/core/config"
@@ -129,6 +133,26 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 func (r *responseRecorder) WriteHeader(statusCode int) { r.status = statusCode }
+
+func TestRequestLogUsesRouteClass(t *testing.T) {
+	var logs bytes.Buffer
+	logger := zerolog.New(&logs)
+	handler := internalhttp.RequestMiddlewareWithLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), logger)
+	req := httptest.NewRequest(http.MethodGet, "/mcp/synthetic-token-value?sessionId=synthetic-token-value", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+	if strings.Contains(logs.String(), "synthetic-token-value") || !strings.Contains(logs.String(), `"route":"other"`) {
+		t.Fatalf("request log = %s", logs.String())
+	}
+
+	logs.Reset()
+	req = httptest.NewRequest(http.MethodPost, "/mcp?sessionId=synthetic-token-value", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+	if strings.Contains(logs.String(), "synthetic-token-value") || !strings.Contains(logs.String(), `"route":"mcp"`) {
+		t.Fatalf("mcp log = %s", logs.String())
+	}
+}
 
 func mustNewRequest(t *testing.T, method, path string) *http.Request {
 	t.Helper()

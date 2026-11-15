@@ -35,7 +35,7 @@ func RequestMiddlewareWithLogger(next http.Handler, logger zerolog.Logger) http.
 
 		logger.Debug().
 			Str("method", r.Method).
-			Str("path", r.URL.Path).
+			Str("route", routeClass(r.URL.Path)).
 			Int("status", lrw.statusCode).
 			Dur("duration", time.Since(start)).
 			Msg("handled HTTP request")
@@ -47,6 +47,21 @@ type loggingResponseWriter struct {
 	mu            sync.Mutex
 	statusCode    int
 	headerWritten bool
+}
+
+func routeClass(path string) string {
+	switch path {
+	case HealthEndpoint:
+		return "healthz"
+	case MCPEndpoint:
+		return "mcp"
+	case SSEEndpoint:
+		return "sse"
+	case SSEMessageEndpoint:
+		return "message"
+	default:
+		return "other"
+	}
 }
 
 func (lrw *loggingResponseWriter) WriteHeader(code int) {
