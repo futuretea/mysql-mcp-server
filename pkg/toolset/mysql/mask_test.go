@@ -212,6 +212,33 @@ func TestBinaryPatternNumericAndColumnMetadata(t *testing.T) {
 	}
 }
 
+func TestOversizedBase64CellIsRejected(t *testing.T) {
+	if !masking.WithinInput(1<<20) || masking.WithinInput(1<<20+1) {
+		t.Fatal("input cap changed")
+	}
+	policy, err := masking.ParseJSON(`{"enabled":true,"value_patterns":["sk_live_[0-9]+"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := append([]byte("sk_live_4242"), bytes.Repeat([]byte{0xff}, 1<<20)...)
+	service := &recordingService{query: internalmysql.QueryResult{
+		Columns: []internalmysql.QueryColumn{{Name: "blob_col", Type: "BLOB"}},
+		Rows:    [][]any{{internalmysql.Cell{Encoding: "base64", Value: base64.StdEncoding.EncodeToString(payload)}}},
+	}}
+	toolset := toolmysql.New(service)
+	toolset.SetPolicy(policy)
+	var handler func(context.Context, map[string]any) (string, error)
+	for _, tool := range toolset.GetTools() {
+		if tool.Tool.Name == "mysql_query" {
+			handler = tool.Handler
+		}
+	}
+	_, err = handler(context.Background(), map[string]any{"sql": "SELECT 1"})
+	if err == nil || err.Error() != "[mysql_masking_failed] result was not returned" || strings.Contains(err.Error(), "sk_live_4242") {
+		t.Fatalf("oversized base64 error = %v", err)
+	}
+}
+
 func enabledPolicy(t *testing.T) masking.Policy {
 	t.Helper()
 	policy, err := masking.ParseJSON(`{"enabled":true,"names":["synthetic_field"],"values":["synthetic-token-value"],"value_patterns":["x+"]}`)
