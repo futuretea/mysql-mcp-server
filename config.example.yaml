@@ -1,3 +1,7 @@
+# MySQL host, database port, username, password, and database are not keys
+# in this file. Set MYSQL_MCP_HOST, MYSQL_MCP_DB_PORT, MYSQL_MCP_USERNAME,
+# MYSQL_MCP_PASSWORD, and MYSQL_MCP_DATABASE in the process environment.
+# MYSQL_DSN is ignored.
 port: 0
 listen: 127.0.0.1
 sse_base_url: ""

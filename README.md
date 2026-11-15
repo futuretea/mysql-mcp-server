@@ -2,14 +2,19 @@
 
 [中文文档](README.zh.md)
 
-An MCP (Model Context Protocol) server and CLI for one MySQL 8.0.46 target.
+An MCP (Model Context Protocol) server and CLI for one MySQL connection.
 It provides metadata discovery and a strict read-only query tool. It does not
-support writes, administration, backups, replication, or dynamic targets.
+support writes, administration, backups, replication, or a second target in
+the same process.
+
+The integration tests use the image `mysql:8.0.46`. Startup reads `VERSION()`
+and `mysql_get_server_info` returns that string. Startup does not reject other
+server versions.
 
 ## Quick start
 
 ```bash
-# Requires Go 1.25+ (see .tool-versions)
+# Use the Go version in .tool-versions and go.mod (1.25.10).
 make build
 ./bin/mysql-mcp-server version
 
@@ -23,11 +28,15 @@ export MYSQL_MCP_DATABASE='inventory'
 # Start MCP server (stdio, default)
 ./bin/mysql-mcp-server mcp
 
-# List / call tools from the CLI (no MCP client required)
+# List tools, or call a tool, without an MCP client
 ./bin/mysql-mcp-server tools list
 ./bin/mysql-mcp-server tools call mysql_list_tables --params '{"database":"inventory"}'
 ./bin/mysql-mcp-server tools call mysql_query --params '{"sql":"SELECT 1"}'
 ```
+
+`make build` writes `./bin/mysql-mcp-server`. `version` prints one line, `mysql-mcp-server version=<version> commit=<commit> date=<date>`. A build without release ldflags prints `version=dev`.
+
+`tools list` and `tools describe` do not open a MySQL connection. `mcp` and `tools call` do. With the environment variables above and a reachable MySQL account, `tools call mysql_query` returns a JSON envelope. If MySQL is not listening, the command exits 1 and prints `[mysql_connection_failed] connection failed`.
 
 ## Features
 
@@ -45,9 +54,9 @@ export MYSQL_MCP_DATABASE='inventory'
 | `mysql_list_tables` | `database` | Base tables and views in a database. |
 | `mysql_describe_table` | `database`, `table` | Column metadata. |
 | `mysql_list_indexes` | `database`, `table` | Indexes and key parts. |
-| `mysql_query` | `sql` | Columns and safely encoded rows from one query. |
+| `mysql_query` | `sql` | Columns and encoded rows from one query. |
 
-Successful calls use a JSON envelope with `schema_version: 1`. Unknown,
+Successful calls use a JSON envelope with `schema_version: 1`. A non-null query cell is `{"encoding","value"}`. `encoding` is `integer`, `float`, `utf8`, or `base64`. SQL `NULL` is JSON `null`. A driver value outside that set fails with `[mysql_result_encoding_failed] result encoding failed`. Unknown,
 missing, empty, and non-string parameters are rejected before any database call.
 
 `mysql_query` accepts one parsed read query only. It rejects multiple or
@@ -116,6 +125,7 @@ Cursor / Claude Desktop style config:
 ```bash
 ./bin/mysql-mcp-server mcp --port 8080
 curl -s http://127.0.0.1:8080/healthz
+# healthy
 ```
 
 Client config example:
@@ -147,43 +157,85 @@ Same process as HTTP mode. Endpoints:
 
 ### Docker
 
+`make docker` builds a local image. It tags that image `ghcr.io/futuretea/mysql-mcp-server:dev` and `ghcr.io/futuretea/mysql-mcp-server:<git describe>`. The `:dev` tag exists only on the machine that built it. GHCR does not publish `:dev`.
+
 ```bash
-# Build
 make docker
 
-# Stdio (default ENTRYPOINT is `mysql-mcp-server mcp`)
+# Stdio. The image ENTRYPOINT is `mysql-mcp-server mcp`.
 docker run -i --rm \
   -e MYSQL_MCP_HOST -e MYSQL_MCP_DB_PORT -e MYSQL_MCP_USERNAME \
   -e MYSQL_MCP_PASSWORD -e MYSQL_MCP_DATABASE \
   ghcr.io/futuretea/mysql-mcp-server:dev
 
-# HTTP
+# HTTP. Publish the host port only to loopback.
 docker run --rm \
   -e MYSQL_MCP_HOST -e MYSQL_MCP_DB_PORT -e MYSQL_MCP_USERNAME \
   -e MYSQL_MCP_PASSWORD -e MYSQL_MCP_DATABASE \
-  -p 8080:8080 ghcr.io/futuretea/mysql-mcp-server:dev --port 8080 --listen 0.0.0.0
+  -p 127.0.0.1:8080:8080 \
+  ghcr.io/futuretea/mysql-mcp-server:dev --port 8080 --listen 0.0.0.0
 ```
 
-HTTP / SSE have **no auth and no TLS**. Default `--listen 127.0.0.1`. Use only on trusted networks; put a reverse proxy in front if you expose the port.
+`curl -s http://127.0.0.1:8080/healthz` prints `healthy`.
+
+The published image tags are under [Use released artifacts](#use-released-artifacts).
+
+HTTP and SSE have no authentication and no TLS. The default `--listen` value is `127.0.0.1`. Put a reverse proxy in front of any listener that is not loopback.
 
 ## Configuration
 
-Priority: **flags > environment variables > config file > defaults**.
+Connection settings and server settings load differently.
 
-### Environment variables
+### MySQL connection
+
+The server reads the connection only from these environment variables. A flag, a YAML key, and `MYSQL_DSN` do not set the host, port, user, password, or database.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MYSQL_MCP_LOG_LEVEL` | Log level | `info` |
-| `MYSQL_MCP_PORT` | MCP HTTP port (`0` = stdio) | `0` |
-| `MYSQL_MCP_LISTEN` | MCP HTTP listen host | `127.0.0.1` |
-| `MYSQL_MCP_SSE_BASE_URL` | Public SSE base URL | `""` |
 | `MYSQL_MCP_HOST` | MySQL TCP host | `127.0.0.1` |
-| `MYSQL_MCP_DB_PORT` | MySQL TCP port; distinct from `MYSQL_MCP_PORT` | `3306` |
-| `MYSQL_MCP_USERNAME` | Required MySQL username | none |
-| `MYSQL_MCP_PASSWORD` | Optional MySQL password; never logged or returned | none |
-| `MYSQL_MCP_DATABASE` | Optional default MySQL database | none |
-| `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` | Skip only the startup unsafe-privilege rejection | `false` |
+| `MYSQL_MCP_DB_PORT` | MySQL TCP port. This is not the HTTP port. | `3306` |
+| `MYSQL_MCP_USERNAME` | MySQL user | none |
+| `MYSQL_MCP_PASSWORD` | MySQL password. The server does not log it or copy it into errors. | empty |
+| `MYSQL_MCP_DATABASE` | Default database | none |
+
+`MYSQL_MCP_USERNAME` must be set before a tool can query. If it is empty, `mcp` still starts and writes this line to stderr:
+
+```text
+mysql runtime configuration unavailable: MYSQL_MCP_USERNAME is required
+```
+
+A tool call then returns `[mysql_configuration_unavailable] configuration unavailable`. `tools call` exits 1. `tools list` and `tools describe` do not read these variables.
+
+A refused or unreachable address returns `[mysql_connection_failed] connection failed`. The privilege check does not run until the connection succeeds.
+
+### Server settings
+
+For every row in this table, a flag you pass wins. Then the environment variable wins. Then the YAML file wins. Then the default is used. Names such as `MCP_PORT`, without the `MYSQL_MCP_` prefix, are ignored.
+
+| Setting | Flag | Environment variable | YAML key | Default |
+|---|---|---|---|---|
+| HTTP port. `0` keeps stdio. | `--port` | `MYSQL_MCP_PORT` | `port` | `0` |
+| HTTP listen host | `--listen` | `MYSQL_MCP_LISTEN` | `listen` | `127.0.0.1` |
+| Public SSE base URL | `--sse-base-url` | `MYSQL_MCP_SSE_BASE_URL` | `sse_base_url` | empty |
+| Log level | `--log-level` | `MYSQL_MCP_LOG_LEVEL` | `log_level` | `info` |
+| Tools to enable | `--enabled-tools` | `MYSQL_MCP_ENABLED_TOOLS` | `enabled_tools` | all tools |
+| Tools to disable | `--disabled-tools` | `MYSQL_MCP_DISABLED_TOOLS` | `disabled_tools` | none |
+| Domains to enable | `--enable-domains` | `MYSQL_MCP_ENABLED_DOMAINS` | `enabled_domains` | all domains |
+| Domains to disable | `--disable-domains` | `MYSQL_MCP_DISABLED_DOMAINS` | `disabled_domains` | none |
+| Skip only the unsafe-privilege rejection | none | `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` | `allow_unsafe_database_role` | `false` |
+
+Log levels are `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic`, and `disabled`. In stdio mode and during `tools call`, the server writes only `error` and more severe levels, even when you set a lower level. The unsafe-role warning is not shown there. HTTP mode uses the level you set. At the default `info` level, HTTP mode shows that warning.
+
+Pass tool and domain lists as comma-separated names. The tool domain is `mysql`.
+
+```bash
+./bin/mysql-mcp-server tools list --enabled-tools mysql_query,mysql_list_databases
+MYSQL_MCP_ENABLED_TOOLS=mysql_query ./bin/mysql-mcp-server tools list
+```
+
+The first command prints `mysql_query` and `mysql_list_databases`. The second prints `mysql_query`.
+
+`MYSQL_MCP_MASKING_JSON` is not one of the rows above. When that variable is present, it replaces the whole YAML `masking` object. See [Output masking](#output-masking).
 
 ### Service account
 
@@ -234,7 +286,8 @@ allow_unsafe_database_role: false
 cmd/mcp-server/          # binary entrypoint
 internal/cmd/             # cobra CLI (mcp / tools / version / completion)
 internal/mysql/           # connection, discovery, query boundary, result encoding
-pkg/core/                 # config / logging / version
+pkg/core/                 # config, logging, version
+pkg/core/masking/         # output masking policy
 pkg/server/mcp/           # MCP registration and transports
 pkg/server/http/          # HTTP / SSE / healthz
 pkg/toolset/              # Toolset interface and filters
@@ -261,7 +314,7 @@ export MYSQL_MCP_MASKING_JSON='{"enabled":true,"names":["synthetic_field"],"valu
 
 Name rules match a whole column, table, index, or database name, and a decoded JSON object key. The pattern is parsed before it is anchored, so a fragment such as `a)|(b` is rejected instead of matching a prefix or a suffix. A value pattern uses RE2 leftmost-first matching and does not look for a longer alternative. A matched string becomes the placeholder and keeps a MySQL `{"encoding","value"}` cell when the cell was text or base64. A matched number or other non-string becomes JSON `null`. An existing SQL `NULL` stays `null`. A JSON `null` in a masked result can therefore be either a database NULL or a redacted value, and the JSON type can change.
 
-Value rules are substring matches on the original text, including one-character literals. They run once and do not search the placeholder. A pattern is rejected when any alternative can match without consuming a character, such as a word-boundary branch. JSON objects and arrays stored in utf8 cells are read as JSON, including escaped keys. A value rule that hits a JSON number or bool, or a MySQL integer or float cell, replaces that whole value with null and does not splice the digits. An unmatched number keeps its original text. Standard base64 cells are decoded, masked, and encoded again, including a value pattern that matches an ASCII secret next to invalid UTF-8. Ordinary prose that looks like base64 is not decoded. One result shares a node and output budget. This is not a detector for every private value, compressed payload, or encoding.
+Value rules are substring matches on the original text, including one-character literals. They run once and do not search the placeholder. A pattern is rejected when any alternative can match without consuming a character, such as a word-boundary branch. JSON objects and arrays stored in utf8 cells are read as JSON, including escaped keys. A value rule that hits a JSON number or bool, or a MySQL integer or float cell, replaces that whole value with null and does not splice the digits. An unmatched number keeps its original text. Standard base64 cells are decoded, masked, and encoded again, including a value pattern that matches an ASCII secret next to invalid UTF-8. Ordinary prose that looks like base64 is not decoded. One result shares a budget of 1 MiB of input and 10,000 nodes. Each of `names`, `name_patterns`, `values`, and `value_patterns` accepts at most 32 entries. A name is at most 128 bytes, a value literal is at most 256 bytes, and a pattern is at most 128 bytes. The placeholder must be 1 to 64 bytes. Past a bound, the call fails and returns no partial payload. This is not a detector for every private value, compressed payload, or encoding.
 
 `schema_version` and the tool name are server constants and are not masked. Fixed public errors are not rewritten, so a short literal that also occurs in an error sentence or in the placeholder can still appear there. The guarantee is that the original configured data is removed from the covered result text.
 
@@ -271,9 +324,22 @@ HTTP debug logs record a route class (`mcp`, `sse`, `message`, or `other`) inste
 
 ## Operational limits
 
-This slice deliberately does not impose query timeouts, row limits, response
-size limits, or concurrency budgets. Keep the server on trusted networks; HTTP
-and SSE have no built-in authentication or TLS termination.
+Query execution has no timeout, row limit, response-size limit, or concurrency budget. The 1 MiB and 10,000-node caps apply only while masking is on. HTTP and SSE have no authentication and no TLS. Keep a non-loopback listener on a trusted network.
+
+### Errors the server returns
+
+These strings are fixed. They do not include SQL text, the password, or the masking document.
+
+| Text | When |
+|---|---|
+| `[mysql_configuration_unavailable] configuration unavailable` | The connection environment is missing or the service was not created. |
+| `[mysql_connection_failed] connection failed` | TCP connect or the startup probe fails. |
+| `[mysql_unsafe_service_role] database service role is not permitted` | The account has a rejected privilege and the opt-out is false. |
+| `[mysql_query_rejected] query rejected` | `mysql_query` refuses the SQL text. |
+| `[mysql_database_error] database error` | MySQL returns an error. Driver text is not copied. |
+| `[mysql_result_encoding_failed] result encoding failed` | A cell type is outside the documented encodings. |
+| `[mysql_masking_failed] result was not returned` | Masking cannot finish inside its bounds. |
+| `invalid masking config` | The masking document is rejected at startup. |
 
 ## Development
 
@@ -288,26 +354,35 @@ make build
 make docker
 ```
 
-### Local MySQL E2E
+### Tests that use MySQL
 
-The real MySQL E2E suite is opt-in and never runs in GitHub Actions or through
-`make ci`. It starts and removes its own disposable `mysql:8.0.46` container,
-then exercises the compiled CLI and MCP stdio transport:
+`make ci` runs lint, `go test ./...`, and the build. The MySQL integration tests skip unless `MYSQL_MCP_INTEGRATION=1`, so `make ci` does not start MySQL.
+
+The GitHub Actions job `MySQL integration` sets `MYSQL_MCP_INTEGRATION=1` and runs `TestMySQL8046Integration` and `TestStartupPrivilegesIntegration`. Each test starts and removes its own `mysql:8.0.46` container. `TestMySQL8046Integration` checks query behavior and expects the version string to start with `8.0.46`. Startup does not enforce that version.
+
+Run the same tests locally when Docker can pull that image:
 
 ```bash
-MYSQL_MCP_INTEGRATION=1 go test ./internal/mysql -run '^TestMySQL8046Integration$' -count=1
+MYSQL_MCP_INTEGRATION=1 go test ./internal/mysql -count=1 -timeout 12m -run 'TestMySQL8046Integration|TestStartupPrivilegesIntegration'
 ```
 
 ## Use released artifacts
 
-Release tags use `vX.Y.Z`. Use `X.Y.Z` for npm and `vX.Y.Z` for Docker.
+The latest published release is `0.2.0`. Release tags use `vX.Y.Z`. npm uses `X.Y.Z`. Docker uses `vX.Y.Z`. GitHub Release pages for these tags do not attach binaries. Install with npm or Docker.
 
 ```bash
-npx -y @futuretea/mysql-mcp-server@<version>
-docker run --rm -i ghcr.io/futuretea/mysql-mcp-server:v<version>
+npx -y @futuretea/mysql-mcp-server@0.2.0
+docker run --rm -i \
+  -e MYSQL_MCP_HOST -e MYSQL_MCP_DB_PORT -e MYSQL_MCP_USERNAME \
+  -e MYSQL_MCP_PASSWORD -e MYSQL_MCP_DATABASE \
+  ghcr.io/futuretea/mysql-mcp-server:v0.2.0
 ```
 
-Both launch the MCP server's `mcp` command. Arguments after the package or image are forwarded to that command.
+`ghcr.io/futuretea/mysql-mcp-server:latest` is the same release. Older published versions remain available: npm `0.0.2` and `0.1.0`, and Docker `v0.0.2` and `v0.1.0`. `0.2.0` is the first release that masks tool output. There is no npm `0.0.1` and no GHCR `v0.0.1` or `:dev`.
+
+Both commands start `mysql-mcp-server mcp`. Arguments after the package or image are flags for `mcp`, such as `--port 8080`. `npx` does not run `tools` or `version`. Use `make build` for those subcommands.
+
+npm publishes `darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64`, and `windows/amd64`. The Docker image index for `v0.2.0` contains `linux/amd64` and `linux/arm64`. The same inventory is in `.github/ci/release-platforms.json`.
 
 Configure an MCP client that supports stdio with npm:
 
@@ -316,7 +391,7 @@ Configure an MCP client that supports stdio with npm:
   "mcpServers": {
     "mysql-mcp-server": {
       "command": "npx",
-      "args": ["-y", "@futuretea/mysql-mcp-server@<version>"],
+      "args": ["-y", "@futuretea/mysql-mcp-server@0.2.0"],
       "env": {
         "MYSQL_MCP_HOST": "127.0.0.1",
         "MYSQL_MCP_DB_PORT": "3306",
@@ -328,8 +403,6 @@ Configure an MCP client that supports stdio with npm:
   }
 }
 ```
-
-Supported release platforms are recorded in `.github/ci/release-platforms.json`.
 
 ## License
 

@@ -20,7 +20,8 @@ type MySQLRuntimeConfig struct {
 }
 
 // LoadMySQLRuntimeConfig loads MySQL connection fields from dedicated runtime
-// environment variables. The generated DSN is not part of the static Viper config.
+// environment variables. Flags and the YAML file do not set these fields.
+// MYSQL_DSN is ignored. The generated DSN is not part of the static Viper config.
 func LoadMySQLRuntimeConfig(getenv func(string) string) (MySQLRuntimeConfig, error) {
 	if getenv == nil {
 		getenv = os.Getenv
