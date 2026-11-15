@@ -31,6 +31,12 @@ type Budget struct {
 	bytes int
 }
 
+// WithinInput reports whether n bytes may be decoded or scanned.
+// Callers check an encoded base64 cell before DecodeString allocates it.
+func WithinInput(n int) bool {
+	return n >= 0 && n <= maxInputBytes
+}
+
 func (b *Budget) add(nodes, size int) error {
 	if b == nil {
 		return nil
@@ -203,7 +209,11 @@ func compilePatterns(patterns []string, names bool) ([]*regexp.Regexp, error) {
 		}
 		expr := pattern
 		if names {
-			expr = `\A(?:` + pattern + `)\z`
+			anchored, err := anchorName(pattern)
+			if err != nil {
+				return nil, invalidConfig()
+			}
+			expr = anchored
 		}
 		re, err := regexp.Compile(expr)
 		if err != nil || re.MatchString("") || !consumesInput(expr) {
@@ -212,6 +222,26 @@ func compilePatterns(patterns []string, names bool) ([]*regexp.Regexp, error) {
 		compiled = append(compiled, re)
 	}
 	return compiled, nil
+}
+
+// anchorName parses pattern on its own, then concatenates text-start and
+// text-end in the syntax tree. Splicing the pattern between `\A(?:` and `)\z`
+// lets `a)|(b` close the group and match a prefix or a suffix.
+func anchorName(pattern string) (string, error) {
+	parsed, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return "", err
+	}
+	anchored := &syntax.Regexp{
+		Op:    syntax.OpConcat,
+		Flags: parsed.Flags,
+		Sub: []*syntax.Regexp{
+			{Op: syntax.OpBeginText},
+			parsed,
+			{Op: syntax.OpEndText},
+		},
+	}
+	return anchored.String(), nil
 }
 
 // consumesInput reports whether every successful alternative consumes at least

@@ -253,6 +253,9 @@ func maskCell(policy masking.Policy, cell any, nameMatched bool, budget *masking
 		}
 		return internalmysql.Cell{Encoding: "utf8", Value: text}, nil
 	case "base64":
+		if !masking.WithinInput(len(typed.Value)) {
+			return nil, masking.ErrFailed
+		}
 		raw, err := base64.StdEncoding.DecodeString(typed.Value)
 		if err != nil {
 			return nil, masking.ErrFailed

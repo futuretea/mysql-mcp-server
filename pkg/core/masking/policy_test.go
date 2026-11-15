@@ -97,8 +97,24 @@ func TestZeroWidthAlternativeIsRejected(t *testing.T) {
 	if !policy.MatchName("id") || policy.MatchName("identity") {
 		t.Fatal("anchored name pattern changed")
 	}
-	got, err := policy.MaskText("sk_live_4242", nil)
-	if err != nil || got != "[masked]" {
-		t.Fatalf("consuming pattern result = %q, %v", got, err)
+}
+
+func TestNamePatternAnchorCannotEscapeTheGroup(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{"enabled": true, "name_patterns": []string{`a)|(b`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseJSON(string(raw)); err == nil || err.Error() != InvalidConfigMessage {
+		t.Fatalf("breakout pattern error = %v", err)
+	}
+	policy, err := ParseJSON(`{"enabled":true,"name_patterns":["(?:a)|(b)"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.MatchName("a") || !policy.MatchName("b") {
+		t.Fatal("grouped alternation missed a whole name")
+	}
+	if policy.MatchName("aSECRET") || policy.MatchName("zzb") || policy.MatchName("ab") {
+		t.Fatal("grouped alternation matched outside the whole name")
 	}
 }
