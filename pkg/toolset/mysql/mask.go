@@ -14,34 +14,35 @@ func (t *Toolset) maskData(data any) (any, error) {
 	if !t.policy.Enabled() {
 		return data, nil
 	}
+	budget := &masking.Budget{}
 	switch typed := data.(type) {
 	case internalmysql.ServerInfo:
-		return t.maskServer(typed)
+		return t.maskServer(typed, budget)
 	case map[string]any:
-		return t.maskDatabaseList(typed)
+		return t.maskDatabaseList(typed, budget)
 	case internalmysql.TablesResult:
-		return t.maskTables(typed)
+		return t.maskTables(typed, budget)
 	case internalmysql.ColumnsResult:
-		return t.maskColumns(typed)
+		return t.maskColumns(typed, budget)
 	case internalmysql.IndexesResult:
-		return t.maskIndexes(typed)
+		return t.maskIndexes(typed, budget)
 	case internalmysql.QueryResult:
-		return t.maskQuery(typed)
+		return t.maskQuery(typed, budget)
 	default:
 		return nil, masking.ErrFailed
 	}
 }
 
-func (t *Toolset) maskServer(info internalmysql.ServerInfo) (internalmysql.ServerInfo, error) {
-	version, err := t.policy.MaskText(info.Version)
+func (t *Toolset) maskServer(info internalmysql.ServerInfo, budget *masking.Budget) (internalmysql.ServerInfo, error) {
+	version, err := t.policy.MaskText(info.Version, budget)
 	if err != nil {
 		return internalmysql.ServerInfo{}, err
 	}
-	comment, err := t.policy.MaskText(info.VersionComment)
+	comment, err := t.policy.MaskText(info.VersionComment, budget)
 	if err != nil {
 		return internalmysql.ServerInfo{}, err
 	}
-	database, err := maskOptionalName(t.policy, info.CurrentDatabase)
+	database, err := maskOptionalName(t.policy, info.CurrentDatabase, budget)
 	if err != nil {
 		return internalmysql.ServerInfo{}, err
 	}
@@ -51,7 +52,7 @@ func (t *Toolset) maskServer(info internalmysql.ServerInfo) (internalmysql.Serve
 	return info, nil
 }
 
-func (t *Toolset) maskDatabaseList(data map[string]any) (map[string]any, error) {
+func (t *Toolset) maskDatabaseList(data map[string]any, budget *masking.Budget) (map[string]any, error) {
 	raw, ok := data["databases"]
 	if !ok || len(data) != 1 {
 		return nil, masking.ErrFailed
@@ -62,7 +63,7 @@ func (t *Toolset) maskDatabaseList(data map[string]any) (map[string]any, error) 
 	}
 	masked := make([]string, len(names))
 	for i, name := range names {
-		value, err := maskIdentifier(t.policy, name)
+		value, err := maskIdentifier(t.policy, name, budget)
 		if err != nil {
 			return nil, err
 		}
@@ -71,18 +72,18 @@ func (t *Toolset) maskDatabaseList(data map[string]any) (map[string]any, error) 
 	return map[string]any{"databases": masked}, nil
 }
 
-func (t *Toolset) maskTables(result internalmysql.TablesResult) (internalmysql.TablesResult, error) {
-	database, err := maskIdentifier(t.policy, result.Database)
+func (t *Toolset) maskTables(result internalmysql.TablesResult, budget *masking.Budget) (internalmysql.TablesResult, error) {
+	database, err := maskIdentifier(t.policy, result.Database, budget)
 	if err != nil {
 		return internalmysql.TablesResult{}, err
 	}
 	tables := make([]internalmysql.Table, len(result.Tables))
 	for i, table := range result.Tables {
-		name, err := maskIdentifier(t.policy, table.Name)
+		name, err := maskIdentifier(t.policy, table.Name, budget)
 		if err != nil {
 			return internalmysql.TablesResult{}, err
 		}
-		kind, err := t.policy.MaskText(table.Type)
+		kind, err := t.policy.MaskText(table.Type, budget)
 		if err != nil {
 			return internalmysql.TablesResult{}, err
 		}
@@ -91,38 +92,38 @@ func (t *Toolset) maskTables(result internalmysql.TablesResult) (internalmysql.T
 	return internalmysql.TablesResult{Database: database, Tables: tables}, nil
 }
 
-func (t *Toolset) maskColumns(result internalmysql.ColumnsResult) (internalmysql.ColumnsResult, error) {
-	database, err := maskIdentifier(t.policy, result.Database)
+func (t *Toolset) maskColumns(result internalmysql.ColumnsResult, budget *masking.Budget) (internalmysql.ColumnsResult, error) {
+	database, err := maskIdentifier(t.policy, result.Database, budget)
 	if err != nil {
 		return internalmysql.ColumnsResult{}, err
 	}
-	table, err := maskIdentifier(t.policy, result.Table)
+	table, err := maskIdentifier(t.policy, result.Table, budget)
 	if err != nil {
 		return internalmysql.ColumnsResult{}, err
 	}
 	columns := make([]internalmysql.Column, len(result.Columns))
 	for i, column := range result.Columns {
-		name, err := maskIdentifier(t.policy, column.Name)
+		name, err := maskIdentifier(t.policy, column.Name, budget)
 		if err != nil {
 			return internalmysql.ColumnsResult{}, err
 		}
-		columnType, err := t.policy.MaskText(column.ColumnType)
+		columnType, err := t.policy.MaskText(column.ColumnType, budget)
 		if err != nil {
 			return internalmysql.ColumnsResult{}, err
 		}
-		key, err := t.policy.MaskText(column.Key)
+		key, err := t.policy.MaskText(column.Key, budget)
 		if err != nil {
 			return internalmysql.ColumnsResult{}, err
 		}
-		extra, err := t.policy.MaskText(column.Extra)
+		extra, err := t.policy.MaskText(column.Extra, budget)
 		if err != nil {
 			return internalmysql.ColumnsResult{}, err
 		}
-		comment, err := t.policy.MaskText(column.Comment)
+		comment, err := t.policy.MaskText(column.Comment, budget)
 		if err != nil {
 			return internalmysql.ColumnsResult{}, err
 		}
-		def, err := maskOptionalText(t.policy, column.Default)
+		def, err := maskOptionalText(t.policy, column.Default, budget)
 		if err != nil {
 			return internalmysql.ColumnsResult{}, err
 		}
@@ -140,32 +141,32 @@ func (t *Toolset) maskColumns(result internalmysql.ColumnsResult) (internalmysql
 	return internalmysql.ColumnsResult{Database: database, Table: table, Columns: columns}, nil
 }
 
-func (t *Toolset) maskIndexes(result internalmysql.IndexesResult) (internalmysql.IndexesResult, error) {
-	database, err := maskIdentifier(t.policy, result.Database)
+func (t *Toolset) maskIndexes(result internalmysql.IndexesResult, budget *masking.Budget) (internalmysql.IndexesResult, error) {
+	database, err := maskIdentifier(t.policy, result.Database, budget)
 	if err != nil {
 		return internalmysql.IndexesResult{}, err
 	}
-	table, err := maskIdentifier(t.policy, result.Table)
+	table, err := maskIdentifier(t.policy, result.Table, budget)
 	if err != nil {
 		return internalmysql.IndexesResult{}, err
 	}
 	indexes := make([]internalmysql.Index, len(result.Indexes))
 	for i, index := range result.Indexes {
-		name, err := maskIdentifier(t.policy, index.Name)
+		name, err := maskIdentifier(t.policy, index.Name, budget)
 		if err != nil {
 			return internalmysql.IndexesResult{}, err
 		}
 		parts := make([]internalmysql.KeyPart, len(index.KeyParts))
 		for j, part := range index.KeyParts {
-			column, err := maskOptionalName(t.policy, part.ColumnName)
+			column, err := maskOptionalName(t.policy, part.ColumnName, budget)
 			if err != nil {
 				return internalmysql.IndexesResult{}, err
 			}
-			expression, err := maskOptionalText(t.policy, part.Expression)
+			expression, err := maskOptionalText(t.policy, part.Expression, budget)
 			if err != nil {
 				return internalmysql.IndexesResult{}, err
 			}
-			collation, err := maskOptionalText(t.policy, part.Collation)
+			collation, err := maskOptionalText(t.policy, part.Collation, budget)
 			if err != nil {
 				return internalmysql.IndexesResult{}, err
 			}
@@ -182,11 +183,11 @@ func (t *Toolset) maskIndexes(result internalmysql.IndexesResult) (internalmysql
 	return internalmysql.IndexesResult{Database: database, Table: table, Indexes: indexes}, nil
 }
 
-func (t *Toolset) maskQuery(result internalmysql.QueryResult) (internalmysql.QueryResult, error) {
+func (t *Toolset) maskQuery(result internalmysql.QueryResult, budget *masking.Budget) (internalmysql.QueryResult, error) {
 	columns := make([]internalmysql.QueryColumn, len(result.Columns))
 	seen := make(map[string]struct{}, len(result.Columns))
 	for i, column := range result.Columns {
-		name, err := maskIdentifier(t.policy, column.Name)
+		name, err := maskIdentifier(t.policy, column.Name, budget)
 		if err != nil {
 			return internalmysql.QueryResult{}, err
 		}
@@ -194,11 +195,19 @@ func (t *Toolset) maskQuery(result internalmysql.QueryResult) (internalmysql.Que
 			return internalmysql.QueryResult{}, masking.ErrFailed
 		}
 		seen[name] = struct{}{}
-		kind, err := t.policy.MaskText(column.Type)
+		kind, err := t.policy.MaskText(column.Type, budget)
 		if err != nil {
 			return internalmysql.QueryResult{}, err
 		}
-		columns[i] = internalmysql.QueryColumn{Name: name, Database: column.Database, Table: column.Table, Type: kind}
+		database, err := maskOptionalName(t.policy, column.Database, budget)
+		if err != nil {
+			return internalmysql.QueryResult{}, err
+		}
+		table, err := maskOptionalName(t.policy, column.Table, budget)
+		if err != nil {
+			return internalmysql.QueryResult{}, err
+		}
+		columns[i] = internalmysql.QueryColumn{Name: name, Database: database, Table: table, Type: kind}
 	}
 	rows := make([][]any, len(result.Rows))
 	for i, row := range result.Rows {
@@ -207,7 +216,7 @@ func (t *Toolset) maskQuery(result internalmysql.QueryResult) (internalmysql.Que
 		}
 		masked := make([]any, len(row))
 		for j, cell := range row {
-			value, err := maskCell(t.policy, cell, t.policy.MatchName(result.Columns[j].Name))
+			value, err := maskCell(t.policy, cell, t.policy.MatchName(result.Columns[j].Name), budget)
 			if err != nil {
 				return internalmysql.QueryResult{}, err
 			}
@@ -218,7 +227,7 @@ func (t *Toolset) maskQuery(result internalmysql.QueryResult) (internalmysql.Que
 	return internalmysql.QueryResult{Columns: columns, Rows: rows}, nil
 }
 
-func maskCell(policy masking.Policy, cell any, nameMatched bool) (any, error) {
+func maskCell(policy masking.Policy, cell any, nameMatched bool, budget *masking.Budget) (any, error) {
 	if cell == nil {
 		return nil, nil
 	}
@@ -238,7 +247,7 @@ func maskCell(policy masking.Policy, cell any, nameMatched bool) (any, error) {
 	}
 	switch typed.Encoding {
 	case "utf8":
-		text, err := policy.MaskText(typed.Value)
+		text, err := policy.MaskText(typed.Value, budget)
 		if err != nil {
 			return nil, err
 		}
@@ -248,7 +257,7 @@ func maskCell(policy masking.Policy, cell any, nameMatched bool) (any, error) {
 		if err != nil {
 			return nil, masking.ErrFailed
 		}
-		masked, err := policy.MaskBytes(raw)
+		masked, err := policy.MaskBytes(raw, budget)
 		if err != nil {
 			return nil, err
 		}
@@ -257,35 +266,42 @@ func maskCell(policy masking.Policy, cell any, nameMatched bool) (any, error) {
 		}
 		return internalmysql.Cell{Encoding: "base64", Value: base64.StdEncoding.EncodeToString(masked)}, nil
 	case "integer", "float":
+		hit, err := policy.MatchScalar(typed.Value, budget)
+		if err != nil {
+			return nil, err
+		}
+		if hit {
+			return nil, nil
+		}
 		return typed, nil
 	default:
 		return nil, masking.ErrFailed
 	}
 }
 
-func maskIdentifier(policy masking.Policy, value string) (string, error) {
+func maskIdentifier(policy masking.Policy, value string, budget *masking.Budget) (string, error) {
 	if policy.MatchName(value) {
 		return policy.Placeholder(), nil
 	}
-	return policy.MaskText(value)
+	return policy.MaskText(value, budget)
 }
 
-func maskOptionalName(policy masking.Policy, value *string) (*string, error) {
+func maskOptionalName(policy masking.Policy, value *string, budget *masking.Budget) (*string, error) {
 	if value == nil {
 		return nil, nil
 	}
-	masked, err := maskIdentifier(policy, *value)
+	masked, err := maskIdentifier(policy, *value, budget)
 	if err != nil {
 		return nil, err
 	}
 	return &masked, nil
 }
 
-func maskOptionalText(policy masking.Policy, value *string) (*string, error) {
+func maskOptionalText(policy masking.Policy, value *string, budget *masking.Budget) (*string, error) {
 	if value == nil {
 		return nil, nil
 	}
-	masked, err := policy.MaskText(*value)
+	masked, err := policy.MaskText(*value, budget)
 	if err != nil {
 		return nil, err
 	}

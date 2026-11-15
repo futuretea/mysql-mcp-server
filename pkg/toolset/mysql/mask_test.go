@@ -1,8 +1,10 @@
 package mysql_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -136,6 +138,80 @@ type toolsetHandler struct {
 	handler func(context.Context, map[string]any) (string, error)
 }
 
+func TestBinaryPatternNumericAndColumnMetadata(t *testing.T) {
+	policy, err := masking.ParseJSON(`{"enabled":true,"names":["synthetic_field","token_table"],"values":["18446744073709551615","1.2300","411111"],"value_patterns":["sk_live_[0-9]+"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := append([]byte{0xff}, []byte("sk_live_4242")...)
+	database := "synthetic_field"
+	table := "token_table"
+	service := &recordingService{query: internalmysql.QueryResult{
+		Columns: []internalmysql.QueryColumn{
+			{Name: "wide", Type: "BIGINT UNSIGNED", Database: &database, Table: &table},
+			{Name: "amount", Type: "DECIMAL"},
+			{Name: "plain", Type: "INT"},
+			{Name: "blob_col", Type: "BLOB"},
+		},
+		Rows: [][]any{{
+			internalmysql.Cell{Encoding: "integer", Value: "18446744073709551615"},
+			internalmysql.Cell{Encoding: "utf8", Value: `{"n":1.2300,"keep":2.50,"code":411111}`},
+			internalmysql.Cell{Encoding: "integer", Value: "7"},
+			internalmysql.Cell{Encoding: "base64", Value: base64.StdEncoding.EncodeToString(raw)},
+		}},
+	}}
+	toolset := toolmysql.New(service)
+	toolset.SetPolicy(policy)
+	var handler func(context.Context, map[string]any) (string, error)
+	for _, tool := range toolset.GetTools() {
+		if tool.Tool.Name == "mysql_query" {
+			handler = tool.Handler
+		}
+	}
+	body, err := handler(context.Background(), map[string]any{"sql": "SELECT sk_live_4242"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := mcpserver.NewTextResult(body, nil)
+	text := result.Content[0].(mcpprotocol.TextContent).Text
+	if result.IsError || text != body {
+		t.Fatalf("mcp text differs from handler text: %s", text)
+	}
+	for _, leaked := range []string{"18446744073709551615", "1.2300", "411111", "synthetic_field", "token_table"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("leaked %s in %s", leaked, text)
+		}
+	}
+	var envelope struct {
+		Data struct {
+			Rows [][]struct {
+				Encoding string `json:"encoding"`
+				Value    string `json:"value"`
+			} `json:"rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	blob := envelope.Data.Rows[0][3]
+	if blob.Encoding != "base64" {
+		t.Fatalf("blob encoding = %s, text %s", blob.Encoding, text)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(blob.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(decoded, []byte("sk_live_4242")) {
+		t.Fatalf("decoded blob still contains the token: %q", decoded)
+	}
+	if !strings.Contains(text, "2.50") || !strings.Contains(text, `"value":"7"`) {
+		t.Fatalf("unmatched numbers changed: %s", text)
+	}
+	if service.sql != "SELECT sk_live_4242" {
+		t.Fatalf("sql changed: %q", service.sql)
+	}
+}
+
 func enabledPolicy(t *testing.T) masking.Policy {
 	t.Helper()
 	policy, err := masking.ParseJSON(`{"enabled":true,"names":["synthetic_field"],"values":["synthetic-token-value"],"value_patterns":["x+"]}`)
@@ -149,6 +225,7 @@ type recordingService struct {
 	calls    int
 	sql      string
 	overflow bool
+	query    internalmysql.QueryResult
 }
 
 func (s *recordingService) GetServerInfo(context.Context) (internalmysql.ServerInfo, error) {
@@ -196,6 +273,9 @@ func (s *recordingService) Query(_ context.Context, query string) (internalmysql
 	s.sql = query
 	if s.overflow {
 		return internalmysql.QueryResult{Columns: []internalmysql.QueryColumn{{Name: "blob_col", Type: "BLOB"}}, Rows: [][]any{{internalmysql.Cell{Encoding: "utf8", Value: strings.Repeat("a", 1<<20+1)}}}}, nil
+	}
+	if s.query.Columns != nil {
+		return s.query, nil
 	}
 	raw := append([]byte{0xff}, []byte(sentinel)...)
 	return internalmysql.QueryResult{

@@ -11,9 +11,7 @@ import (
 )
 
 const (
-	maxInputBytes   = 1 << 20
 	maxDecodedBytes = 1 << 20
-	maxNodes        = 10000
 	maxDepth        = 32
 	maxJSONRounds   = 2
 )
@@ -22,53 +20,87 @@ type span struct{ start, end int }
 
 // MaskText applies value rules and, when the whole string is a JSON object or
 // array, field rules. An inactive policy returns the input unchanged.
-func (p Policy) MaskText(value string) (string, error) {
+func (p Policy) MaskText(value string, budget *Budget) (string, error) {
 	if !p.enabled {
 		return value, nil
 	}
-	nodes := 0
-	out, _, err := p.maskString(value, 0, &nodes)
+	if budget == nil {
+		budget = &Budget{}
+	}
+	out, _, err := p.maskString(value, 0, budget)
 	return out, err
 }
 
-// MaskBytes decodes a known byte payload. Valid UTF-8 uses MaskText. Other
-// bytes are searched for configured literals only. Regex is not applied to
-// invalid UTF-8. The result is the bytes to encode again.
-func (p Policy) MaskBytes(value []byte) ([]byte, error) {
+// MaskBytes applies value rules to a known decoded payload, including an
+// ASCII secret surrounded by invalid UTF-8. Valid UTF-8 also uses JSON rules.
+// The returned bytes are what the caller encodes again.
+func (p Policy) MaskBytes(value []byte, budget *Budget) ([]byte, error) {
 	if !p.enabled {
 		return append([]byte(nil), value...), nil
+	}
+	if budget == nil {
+		budget = &Budget{}
 	}
 	if len(value) > maxDecodedBytes {
 		return nil, ErrFailed
 	}
 	if utf8.Valid(value) {
-		text, err := p.MaskText(string(value))
+		text, err := p.MaskText(string(value), budget)
 		if err != nil {
 			return nil, err
 		}
 		return []byte(text), nil
 	}
-	return p.replaceByteLiterals(value), nil
+	text, err := p.replaceSpans(string(value), budget)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(text), nil
 }
 
-func (p Policy) maskString(value string, rounds int, nodes *int) (string, bool, error) {
+// MatchScalar reports whether a value rule hits the original scalar text.
+// A hit means the whole number or bool becomes null. The text is not edited.
+func (p Policy) MatchScalar(original string, budget *Budget) (bool, error) {
+	if !p.enabled {
+		return false, nil
+	}
+	if budget == nil {
+		budget = &Budget{}
+	}
+	if len(original) > maxInputBytes {
+		return false, ErrFailed
+	}
+	spans, err := p.collectSpans(original)
+	if err != nil {
+		return false, err
+	}
+	if err := budget.add(1, len(original)); err != nil {
+		return false, err
+	}
+	return len(spans) > 0, nil
+}
+
+func (p Policy) maskString(value string, rounds int, budget *Budget) (string, bool, error) {
 	if len(value) > maxInputBytes {
 		return "", false, ErrFailed
 	}
 	if rounds < maxJSONRounds {
-		if out, ok, err := p.maskJSONDocument(value, rounds, nodes); err != nil || ok {
-			return out, out != value, err
+		if out, ok, err := p.maskJSONDocument(value, rounds, budget); err != nil || ok {
+			if err != nil {
+				return "", false, err
+			}
+			if err := budget.add(1, len(out)); err != nil {
+				return "", false, err
+			}
+			return out, out != value, nil
 		}
 	} else if _, ok, err := parseStructural(value); err != nil {
 		return "", false, err
 	} else if ok {
 		return "", false, ErrFailed
 	}
-	out := p.replaceSpans(value)
-	if len(out) > maxInputBytes {
-		return "", false, ErrFailed
-	}
-	return out, out != value, nil
+	out, err := p.replaceSpans(value, budget)
+	return out, out != value, err
 }
 
 func parseStructural(value string) (any, bool, error) {
@@ -91,14 +123,14 @@ func parseStructural(value string) (any, bool, error) {
 	return skip, true, nil
 }
 
-func (p Policy) maskJSONDocument(value string, rounds int, nodes *int) (string, bool, error) {
+func (p Policy) maskJSONDocument(value string, rounds int, budget *Budget) (string, bool, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
 		return "", false, nil
 	}
 	decoder := json.NewDecoder(strings.NewReader(trimmed))
 	decoder.UseNumber()
-	node, changed, err := p.maskNode(decoder, 1, rounds+1, nodes)
+	node, changed, err := p.maskNode(decoder, 1, rounds+1, budget)
 	if err != nil {
 		if isJSONSyntax(err) {
 			return "", false, nil
@@ -141,9 +173,8 @@ func isJSONSyntax(err error) bool {
 	return errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-func (p Policy) maskNode(decoder *json.Decoder, depth, rounds int, nodes *int) (node, bool, error) {
-	*nodes++
-	if *nodes > maxNodes || depth > maxDepth {
+func (p Policy) maskNode(decoder *json.Decoder, depth, rounds int, budget *Budget) (node, bool, error) {
+	if err := budget.add(1, 0); err != nil || depth > maxDepth {
 		return node{}, false, ErrFailed
 	}
 	token, err := decoder.Token()
@@ -154,36 +185,58 @@ func (p Policy) maskNode(decoder *json.Decoder, depth, rounds int, nodes *int) (
 	case json.Delim:
 		switch typed {
 		case '{':
-			return p.maskObject(decoder, depth, rounds, nodes)
+			return p.maskObject(decoder, depth, rounds, budget)
 		case '[':
-			return p.maskArray(decoder, depth, rounds, nodes)
+			return p.maskArray(decoder, depth, rounds, budget)
 		default:
 			return node{}, false, ErrFailed
 		}
 	case string:
-		text, changed, err := p.maskString(typed, rounds, nodes)
+		text, changed, err := p.maskString(typed, rounds, budget)
 		if err != nil {
 			return node{}, false, err
 		}
 		return node{kind: "string", text: text}, changed, nil
 	case nil:
 		return node{kind: "null"}, false, nil
-	case bool:
-		return node{kind: "bool", flag: typed}, false, nil
 	case json.Number:
-		return node{kind: "number", text: typed.String()}, false, nil
+		return p.maskNumber(typed.String(), budget)
 	case float64:
 		raw, err := json.Marshal(typed)
 		if err != nil {
 			return node{}, false, ErrFailed
 		}
-		return node{kind: "number", text: string(raw)}, false, nil
+		return p.maskNumber(string(raw), budget)
+	case bool:
+		text := "false"
+		if typed {
+			text = "true"
+		}
+		hit, err := p.MatchScalar(text, budget)
+		if err != nil {
+			return node{}, false, err
+		}
+		if hit {
+			return node{kind: "null"}, true, nil
+		}
+		return node{kind: "bool", flag: typed}, false, nil
 	default:
 		return node{}, false, ErrFailed
 	}
 }
 
-func (p Policy) maskObject(decoder *json.Decoder, depth, rounds int, nodes *int) (node, bool, error) {
+func (p Policy) maskNumber(original string, budget *Budget) (node, bool, error) {
+	hit, err := p.MatchScalar(original, budget)
+	if err != nil {
+		return node{}, false, err
+	}
+	if hit {
+		return node{kind: "null"}, true, nil
+	}
+	return node{kind: "number", text: original}, false, nil
+}
+
+func (p Policy) maskObject(decoder *json.Decoder, depth, rounds int, budget *Budget) (node, bool, error) {
 	fields := make([]field, 0)
 	seen := make(map[string]struct{})
 	changed := false
@@ -200,7 +253,7 @@ func (p Policy) maskObject(decoder *json.Decoder, depth, rounds int, nodes *int)
 			return node{}, false, ErrFailed
 		}
 		seen[key] = struct{}{}
-		value, valueChanged, err := p.maskNode(decoder, depth+1, rounds, nodes)
+		value, valueChanged, err := p.maskNode(decoder, depth+1, rounds, budget)
 		if err != nil {
 			return node{}, false, err
 		}
@@ -210,7 +263,10 @@ func (p Policy) maskObject(decoder *json.Decoder, depth, rounds int, nodes *int)
 			value = wholeValue(value, p.Placeholder())
 			changed = true
 		} else {
-			replaced := p.replaceSpans(key)
+			replaced, err := p.replaceSpans(key, budget)
+			if err != nil {
+				return node{}, false, err
+			}
 			if replaced != key {
 				keyOut = replaced
 				changed = true
@@ -233,11 +289,11 @@ func (p Policy) maskObject(decoder *json.Decoder, depth, rounds int, nodes *int)
 	return node{kind: "object", fields: fields}, changed, nil
 }
 
-func (p Policy) maskArray(decoder *json.Decoder, depth, rounds int, nodes *int) (node, bool, error) {
+func (p Policy) maskArray(decoder *json.Decoder, depth, rounds int, budget *Budget) (node, bool, error) {
 	items := make([]node, 0)
 	changed := false
 	for decoder.More() {
-		item, itemChanged, err := p.maskNode(decoder, depth+1, rounds, nodes)
+		item, itemChanged, err := p.maskNode(decoder, depth+1, rounds, budget)
 		if err != nil {
 			return node{}, false, err
 		}
@@ -349,13 +405,26 @@ func writeNode(buf *bytes.Buffer, value node) error {
 	return nil
 }
 
-func (p Policy) replaceSpans(value string) string {
-	spans := p.collectSpans(value)
+func (p Policy) replaceSpans(value string, budget *Budget) (string, error) {
+	if len(value) > maxInputBytes {
+		return "", ErrFailed
+	}
+	spans, err := p.collectSpans(value)
+	if err != nil {
+		return "", err
+	}
+	size, err := outputSize(len(value), spans, len(p.Placeholder()))
+	if err != nil {
+		return "", err
+	}
+	if err := budget.add(1, size); err != nil {
+		return "", err
+	}
 	if len(spans) == 0 {
-		return value
+		return value, nil
 	}
 	var buf strings.Builder
-	buf.Grow(len(value))
+	buf.Grow(size)
 	last := 0
 	for _, item := range spans {
 		buf.WriteString(value[last:item.start])
@@ -363,11 +432,21 @@ func (p Policy) replaceSpans(value string) string {
 		last = item.end
 	}
 	buf.WriteString(value[last:])
-	return buf.String()
+	return buf.String(), nil
 }
 
-func (p Policy) collectSpans(value string) []span {
+func (p Policy) collectSpans(value string) ([]span, error) {
 	found := make([]span, 0)
+	add := func(start, end int) error {
+		if end <= start {
+			return ErrFailed
+		}
+		if len(found) == maxSpans {
+			return ErrFailed
+		}
+		found = append(found, span{start: start, end: end})
+		return nil
+	}
 	literals := append([]string(nil), p.values...)
 	sort.Slice(literals, func(i, j int) bool { return len(literals[i]) > len(literals[j]) })
 	for _, literal := range literals {
@@ -378,19 +457,42 @@ func (p Policy) collectSpans(value string) []span {
 				break
 			}
 			start := from + index
-			found = append(found, span{start: start, end: start + len(literal)})
+			if err := add(start, start+len(literal)); err != nil {
+				return nil, err
+			}
 			from = start + len(literal)
 		}
 	}
 	for _, pattern := range p.valuePatterns {
 		for _, loc := range pattern.FindAllStringIndex(value, -1) {
-			if loc[0] == loc[1] {
-				continue
+			if err := add(loc[0], loc[1]); err != nil {
+				return nil, err
 			}
-			found = append(found, span{start: loc[0], end: loc[1]})
 		}
 	}
-	return mergeSpans(found)
+	return mergeSpans(found), nil
+}
+
+func outputSize(input int, spans []span, placeholder int) (int, error) {
+	size := input
+	for _, item := range spans {
+		width := item.end - item.start
+		if width <= 0 || item.start < 0 || item.end > input {
+			return 0, ErrFailed
+		}
+		if size < width {
+			return 0, ErrFailed
+		}
+		size -= width
+		if placeholder > maxInputBytes-size {
+			return 0, ErrFailed
+		}
+		size += placeholder
+	}
+	if size > maxInputBytes {
+		return 0, ErrFailed
+	}
+	return size, nil
 }
 
 func mergeSpans(spans []span) []span {
@@ -415,49 +517,4 @@ func mergeSpans(spans []span) []span {
 		merged = append(merged, item)
 	}
 	return merged
-}
-
-func (p Policy) replaceByteLiterals(value []byte) []byte {
-	type byteSpan struct{ start, end int }
-	found := make([]byteSpan, 0)
-	literals := append([]string(nil), p.values...)
-	sort.Slice(literals, func(i, j int) bool { return len(literals[i]) > len(literals[j]) })
-	for _, literal := range literals {
-		needle := []byte(literal)
-		from := 0
-		for from <= len(value)-len(needle) {
-			index := bytes.Index(value[from:], needle)
-			if index < 0 {
-				break
-			}
-			start := from + index
-			found = append(found, byteSpan{start: start, end: start + len(needle)})
-			from = start + len(needle)
-		}
-	}
-	if len(found) == 0 {
-		return append([]byte(nil), value...)
-	}
-	sort.Slice(found, func(i, j int) bool { return found[i].start < found[j].start })
-	merged := []byteSpan{found[0]}
-	for _, item := range found[1:] {
-		last := &merged[len(merged)-1]
-		if item.start <= last.end {
-			if item.end > last.end {
-				last.end = item.end
-			}
-			continue
-		}
-		merged = append(merged, item)
-	}
-	placeholder := []byte(p.Placeholder())
-	var buf bytes.Buffer
-	last := 0
-	for _, item := range merged {
-		buf.Write(value[last:item.start])
-		buf.Write(placeholder)
-		last = item.end
-	}
-	buf.Write(value[last:])
-	return buf.Bytes()
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 )
 
@@ -17,7 +18,30 @@ const (
 	maxNameBytes         = 128
 	maxLiteralBytes      = 256
 	maxPatternBytes      = 128
+	maxInputBytes        = 1 << 20
+	maxNodes             = 10000
+	maxSpans             = 4096
 )
+
+// Budget counts nodes and output bytes for one tool result. Pass the same
+// pointer to every MaskText, MaskBytes, and MatchScalar call in that result.
+// A nil budget applies the same caps to that call alone.
+type Budget struct {
+	nodes int
+	bytes int
+}
+
+func (b *Budget) add(nodes, size int) error {
+	if b == nil {
+		return nil
+	}
+	if nodes < 0 || size < 0 || b.nodes > maxNodes-nodes || b.bytes > maxInputBytes-size {
+		return ErrFailed
+	}
+	b.nodes += nodes
+	b.bytes += size
+	return nil
+}
 
 // ErrFailed means a result cannot be returned without exposing covered data
 // or exceeding a bound. The error text is not the source value.
@@ -182,10 +206,74 @@ func compilePatterns(patterns []string, names bool) ([]*regexp.Regexp, error) {
 			expr = `\A(?:` + pattern + `)\z`
 		}
 		re, err := regexp.Compile(expr)
-		if err != nil || re.MatchString("") {
+		if err != nil || re.MatchString("") || !consumesInput(expr) {
 			return nil, invalidConfig()
 		}
 		compiled = append(compiled, re)
 	}
 	return compiled, nil
+}
+
+// consumesInput reports whether every successful alternative consumes at least
+// one rune. A branch that can match empty, including a word boundary, is rejected.
+func consumesInput(expr string) bool {
+	parsed, err := syntax.Parse(expr, syntax.Perl)
+	if err != nil {
+		return false
+	}
+	parsed = parsed.Simplify()
+	return minMatch(parsed) > 0
+}
+
+func minMatch(re *syntax.Regexp) int {
+	switch re.Op {
+	case syntax.OpNoMatch:
+		return 1
+	case syntax.OpEmptyMatch, syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText, syntax.OpEndText, syntax.OpWordBoundary, syntax.OpNoWordBoundary:
+		return 0
+	case syntax.OpLiteral:
+		return len(re.Rune)
+	case syntax.OpCharClass, syntax.OpAnyCharNotNL, syntax.OpAnyChar:
+		return 1
+	case syntax.OpCapture, syntax.OpPlus:
+		if len(re.Sub) == 0 {
+			return 0
+		}
+		return minMatch(re.Sub[0])
+	case syntax.OpStar, syntax.OpQuest:
+		return 0
+	case syntax.OpRepeat:
+		if len(re.Sub) == 0 || re.Min == 0 {
+			return 0
+		}
+		inner := minMatch(re.Sub[0])
+		if inner == 0 || re.Min > maxInputBytes/inner {
+			return 0
+		}
+		return re.Min * inner
+	case syntax.OpConcat:
+		total := 0
+		for _, sub := range re.Sub {
+			width := minMatch(sub)
+			if width > maxInputBytes-total {
+				return maxInputBytes
+			}
+			total += width
+		}
+		return total
+	case syntax.OpAlternate:
+		if len(re.Sub) == 0 {
+			return 0
+		}
+		width := minMatch(re.Sub[0])
+		for _, sub := range re.Sub[1:] {
+			next := minMatch(sub)
+			if next < width {
+				width = next
+			}
+		}
+		return width
+	default:
+		return 0
+	}
 }
