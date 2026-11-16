@@ -1,3 +1,7 @@
+# MySQL host, database port, username, password, and database are not keys
+# in this file. Set MYSQL_MCP_HOST, MYSQL_MCP_DB_PORT, MYSQL_MCP_USERNAME,
+# MYSQL_MCP_PASSWORD, and MYSQL_MCP_DATABASE in the process environment.
+# MYSQL_DSN is ignored.
 port: 0
 listen: 127.0.0.1
 sse_base_url: ""
@@ -7,12 +11,15 @@ disabled_tools: []
 enabled_domains: []
 disabled_domains: []
 # Skip only the startup service-account privilege check. Leave false unless a
-# least-privilege account is unavailable. Also MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE.
+# least-privilege account is unavailable. A non-empty
+# MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE replaces this value. An empty value
+# does not, so true stays true.
 allow_unsafe_database_role: false
 
 # Output masking is off unless enabled is true and at least one rule is set.
-# MYSQL_MCP_MASKING_JSON, when set, replaces this object. An empty value is
-# invalid. Leaving the variable unset keeps this object.
+# A present valid MYSQL_MCP_MASKING_JSON document replaces this object.
+# A present empty or invalid document fails configuration load and does not
+# fall back to this object. Leaving the variable unset keeps this object.
 # masking:
 #   enabled: false
 #   placeholder: "[masked]"
