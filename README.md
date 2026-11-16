@@ -7,9 +7,7 @@ It provides metadata discovery and a strict read-only query tool. It does not
 support writes, administration, backups, replication, or a second target in
 the same process.
 
-The integration tests use the image `mysql:8.0.46`. Startup reads `VERSION()`
-and `mysql_get_server_info` returns that string. Startup does not reject other
-server versions.
+The integration tests use the image `mysql:8.0.46`. Calling `mysql_get_server_info` runs `SELECT VERSION(), @@version_comment, DATABASE()`. Startup does not read `VERSION()`, and it does not reject other server versions.
 
 ## Quick start
 
@@ -56,8 +54,7 @@ export MYSQL_MCP_DATABASE='inventory'
 | `mysql_list_indexes` | `database`, `table` | Indexes and key parts. |
 | `mysql_query` | `sql` | Columns and encoded rows from one query. |
 
-Successful calls use a JSON envelope with `schema_version: 1`. A non-null query cell is `{"encoding","value"}`. `encoding` is `integer`, `float`, `utf8`, or `base64`. SQL `NULL` is JSON `null`. A driver value outside that set fails with `[mysql_result_encoding_failed] result encoding failed`. Unknown,
-missing, empty, and non-string parameters are rejected before any database call.
+Successful calls use a JSON envelope with `schema_version: 1`. A non-null query cell is `{"encoding","value"}`. `encoding` is `integer`, `float`, `utf8`, or `base64`. SQL `NULL` is JSON `null`. A driver value outside that set fails with `[mysql_result_encoding_failed] result encoding failed`. Before any database call, an argument set that is not a JSON object, or a value that is unknown, missing, empty, or not a string, returns `[mysql_invalid_params] invalid parameters`.
 
 `mysql_query` accepts one parsed read query only. It rejects multiple or
 non-query statements, `INTO`, locking reads, user-variable assignments, and
@@ -210,21 +207,26 @@ A refused or unreachable address returns `[mysql_connection_failed] connection f
 
 ### Server settings
 
-For every row in this table, a flag you pass wins. Then the environment variable wins. Then the YAML file wins. Then the default is used. Names such as `MCP_PORT`, without the `MYSQL_MCP_` prefix, are ignored.
+`--port`, `--listen`, `--sse-base-url`, and `--log-level` exist only on `mysql-mcp-server mcp`. `tools` rejects those flags. On `mcp`, a flag you pass wins, then the environment variable, then the YAML file, then the default. Names such as `MCP_PORT`, without the `MYSQL_MCP_` prefix, are ignored.
 
-| Setting | Flag | Environment variable | YAML key | Default |
+| Setting | `mcp` flag | Environment variable | YAML key | Default |
 |---|---|---|---|---|
 | HTTP port. `0` keeps stdio. | `--port` | `MYSQL_MCP_PORT` | `port` | `0` |
 | HTTP listen host | `--listen` | `MYSQL_MCP_LISTEN` | `listen` | `127.0.0.1` |
 | Public SSE base URL | `--sse-base-url` | `MYSQL_MCP_SSE_BASE_URL` | `sse_base_url` | empty |
 | Log level | `--log-level` | `MYSQL_MCP_LOG_LEVEL` | `log_level` | `info` |
+
+`tools` reads the log level from `MYSQL_MCP_LOG_LEVEL` or YAML `log_level`. It has no `--log-level` flag. Log levels are `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic`, and `disabled`. In stdio mode and during `tools call`, the server writes only `error` and more severe levels, even when you set a lower level. The unsafe-role warning is not shown there. HTTP mode uses the level you set. At the default `info` level, HTTP mode shows that warning.
+
+`--config`, `--enabled-tools`, `--disabled-tools`, `--enable-domains`, and `--disable-domains` are persistent flags. They work on `mcp` and on `tools`. The same order applies: flag, then environment variable, then YAML, then default.
+
+| Setting | Flag | Environment variable | YAML key | Default |
+|---|---|---|---|---|
 | Tools to enable | `--enabled-tools` | `MYSQL_MCP_ENABLED_TOOLS` | `enabled_tools` | all tools |
 | Tools to disable | `--disabled-tools` | `MYSQL_MCP_DISABLED_TOOLS` | `disabled_tools` | none |
 | Domains to enable | `--enable-domains` | `MYSQL_MCP_ENABLED_DOMAINS` | `enabled_domains` | all domains |
 | Domains to disable | `--disable-domains` | `MYSQL_MCP_DISABLED_DOMAINS` | `disabled_domains` | none |
 | Skip only the unsafe-privilege rejection | none | `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` | `allow_unsafe_database_role` | `false` |
-
-Log levels are `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic`, and `disabled`. In stdio mode and during `tools call`, the server writes only `error` and more severe levels, even when you set a lower level. The unsafe-role warning is not shown there. HTTP mode uses the level you set. At the default `info` level, HTTP mode shows that warning.
 
 Pass tool and domain lists as comma-separated names. The tool domain is `mysql`.
 
@@ -314,17 +316,21 @@ export MYSQL_MCP_MASKING_JSON='{"enabled":true,"names":["synthetic_field"],"valu
 
 Name rules match a whole column, table, index, or database name, and a decoded JSON object key. The pattern is parsed before it is anchored, so a fragment such as `a)|(b` is rejected instead of matching a prefix or a suffix. A value pattern uses RE2 leftmost-first matching and does not look for a longer alternative. A matched string becomes the placeholder and keeps a MySQL `{"encoding","value"}` cell when the cell was text or base64. A matched number or other non-string becomes JSON `null`. An existing SQL `NULL` stays `null`. A JSON `null` in a masked result can therefore be either a database NULL or a redacted value, and the JSON type can change.
 
-Value rules are substring matches on the original text, including one-character literals. They run once and do not search the placeholder. A pattern is rejected when any alternative can match without consuming a character, such as a word-boundary branch. JSON objects and arrays stored in utf8 cells are read as JSON, including escaped keys. A value rule that hits a JSON number or bool, or a MySQL integer or float cell, replaces that whole value with null and does not splice the digits. An unmatched number keeps its original text. Standard base64 cells are decoded, masked, and encoded again, including a value pattern that matches an ASCII secret next to invalid UTF-8. Ordinary prose that looks like base64 is not decoded. One result shares a budget of 1 MiB of input and 10,000 nodes. Each of `names`, `name_patterns`, `values`, and `value_patterns` accepts at most 32 entries. A name is at most 128 bytes, a value literal is at most 256 bytes, and a pattern is at most 128 bytes. The placeholder must be 1 to 64 bytes. Past a bound, the call fails and returns no partial payload. This is not a detector for every private value, compressed payload, or encoding.
+Value rules are substring matches on the original text, including one-character literals. They run once and do not search the placeholder. A pattern is rejected when any alternative can match without consuming a character, such as a word-boundary branch. JSON objects and arrays stored in utf8 cells are read as JSON, including escaped keys. A value rule that hits a JSON number or bool, or a MySQL integer or float cell, replaces that whole value with null and does not splice the digits. An unmatched number keeps its original text. Standard base64 cells are decoded, masked, and encoded again, including a value pattern that matches an ASCII secret next to invalid UTF-8. Ordinary prose that looks like base64 is not decoded. This is not a detector for every private value, compressed payload, or encoding.
+
+A bad masking document fails when configuration is loaded, before a tool runs. Each of `names`, `name_patterns`, `values`, and `value_patterns` accepts at most 32 entries. A name is at most 128 bytes. A value literal is at most 256 bytes. A pattern is at most 128 bytes. The placeholder must be 1 to 64 bytes. `enabled: true` with no rules fails the same way. The command prints `load config: invalid masking config` and does not echo the document.
+
+While masking is on, one tool result uses one shared budget. The budget counts nodes, and it counts bytes passed to `Budget.add`. A text replacement charges the output size from `outputSize`. Re-encoded JSON charges the encoded length. A number or bool check charges the original text length. The budget allows 10,000 nodes and 1 MiB of those charged bytes. Separately, one input string longer than 1 MiB is rejected. JSON stored inside a string is masked for 2 rounds. A further structural JSON object or array fails the result. JSON deeper than 32 levels fails the result. More than 4,096 matches in one value fails the result. The call returns `[mysql_masking_failed] result was not returned` and no partial payload.
 
 `schema_version` and the tool name are server constants and are not masked. Fixed public errors are not rewritten, so a short literal that also occurs in an error sentence or in the placeholder can still appear there. The guarantee is that the original configured data is removed from the covered result text.
 
-Invalid masking configuration, including `enabled: true` with no rules, stops startup with `invalid masking config` and does not echo the document. A result that exceeds a bound, has duplicate JSON keys, has two masked names that collide, or has an unsupported cell fails with `[mysql_masking_failed] result was not returned`. The database command is unchanged.
+Duplicate JSON keys, two masked names that collide, or an unsupported cell also return `[mysql_masking_failed] result was not returned`. The database command is unchanged.
 
 HTTP debug logs record a route class (`mcp`, `sse`, `message`, or `other`) instead of the raw path or query. The masker does not write the source value to a log.
 
 ## Operational limits
 
-Query execution has no timeout, row limit, response-size limit, or concurrency budget. The 1 MiB and 10,000-node caps apply only while masking is on. HTTP and SSE have no authentication and no TLS. Keep a non-loopback listener on a trusted network.
+Query execution has no timeout, row limit, response-size limit, or concurrency budget. The masking limits above apply only while masking is on. HTTP and SSE have no authentication and no TLS. Keep a non-loopback listener on a trusted network.
 
 ### Errors the server returns
 
@@ -333,13 +339,14 @@ These strings are fixed. They do not include SQL text, the password, or the mask
 | Text | When |
 |---|---|
 | `[mysql_configuration_unavailable] configuration unavailable` | The connection environment is missing or the service was not created. |
-| `[mysql_connection_failed] connection failed` | TCP connect or the startup probe fails. |
+| `[mysql_invalid_params] invalid parameters` | The arguments are not a JSON object, or a value is unknown, missing, empty, or not a string. No database call is made. |
+| `[mysql_connection_failed] connection failed` | The driver error is a deadline, `driver.ErrBadConn`, `sql.ErrConnDone`, or a `net.Error`. |
 | `[mysql_unsafe_service_role] database service role is not permitted` | The account has a rejected privilege and the opt-out is false. |
 | `[mysql_query_rejected] query rejected` | `mysql_query` refuses the SQL text. |
-| `[mysql_database_error] database error` | MySQL returns an error. Driver text is not copied. |
+| `[mysql_database_error] database error` | MySQL returns another error, including a `SHOW GRANTS` failure that is not one of the connection cases above. Driver text is not copied. |
 | `[mysql_result_encoding_failed] result encoding failed` | A cell type is outside the documented encodings. |
 | `[mysql_masking_failed] result was not returned` | Masking cannot finish inside its bounds. |
-| `invalid masking config` | The masking document is rejected at startup. |
+| `load config: invalid masking config` | Configuration load rejects the masking document. The document is not echoed. |
 
 ## Development
 
@@ -358,7 +365,7 @@ make docker
 
 `make ci` runs lint, `go test ./...`, and the build. The MySQL integration tests skip unless `MYSQL_MCP_INTEGRATION=1`, so `make ci` does not start MySQL.
 
-The GitHub Actions job `MySQL integration` sets `MYSQL_MCP_INTEGRATION=1` and runs `TestMySQL8046Integration` and `TestStartupPrivilegesIntegration`. Each test starts and removes its own `mysql:8.0.46` container. `TestMySQL8046Integration` checks query behavior and expects the version string to start with `8.0.46`. Startup does not enforce that version.
+The GitHub Actions job `MySQL integration` sets `MYSQL_MCP_INTEGRATION=1` and runs `TestMySQL8046Integration` and `TestStartupPrivilegesIntegration`. Each test starts and removes its own `mysql:8.0.46` container. `TestMySQL8046Integration` checks query behavior. It expects `mysql_get_server_info` to return a version string that starts with `8.0.46`. Startup does not read or enforce the server version.
 
 Run the same tests locally when Docker can pull that image:
 
@@ -379,6 +386,8 @@ docker run --rm -i \
 ```
 
 `ghcr.io/futuretea/mysql-mcp-server:latest` is the same release. Older published versions remain available: npm `0.0.2` and `0.1.0`, and Docker `v0.0.2` and `v0.1.0`. `0.2.0` is the first release that masks tool output. There is no npm `0.0.1` and no GHCR `v0.0.1` or `:dev`.
+
+The npm package `@futuretea/mysql-mcp-server@0.2.0` still contains the README from that release. The README in this repository is the corrected text. Replacing the README inside the published tarball requires a new release, and this change does not publish one.
 
 Both commands start `mysql-mcp-server mcp`. Arguments after the package or image are flags for `mcp`, such as `--port 8080`. `npx` does not run `tools` or `version`. Use `make build` for those subcommands.
 
