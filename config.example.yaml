@@ -17,9 +17,9 @@ disabled_domains: []
 allow_unsafe_database_role: false
 
 # Output masking is off unless enabled is true and at least one rule is set.
-# MYSQL_MCP_MASKING_JSON is not the empty-variable rule above. If the variable
-# is present, including when it is empty, configuration load fails even if the
-# object below is valid. Leaving the variable unset keeps this object.
+# A present valid MYSQL_MCP_MASKING_JSON document replaces this object.
+# A present empty or invalid document fails configuration load and does not
+# fall back to this object. Leaving the variable unset keeps this object.
 # masking:
 #   enabled: false
 #   placeholder: "[masked]"
