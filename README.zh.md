@@ -51,7 +51,11 @@ export MYSQL_MCP_DATABASE='inventory'
 | `mysql_list_indexes` | `database`、`table` | 索引与 key parts。 |
 | `mysql_query` | `sql` | 单条查询的列和编码后的 rows。 |
 
-成功调用使用带 `schema_version: 1` 的同一 JSON envelope。非 NULL 的查询单元格是 `{"encoding","value"}`。`encoding` 为 `integer`、`float`、`utf8` 或 `base64`。SQL `NULL` 是 JSON `null`。文档约定之外的驱动类型失败，错误是 `[mysql_result_encoding_failed] result encoding failed`。在任何数据库调用之前，参数不是 JSON 对象，或者某个值未知、缺失、为空、或不是字符串，都会返回 `[mysql_invalid_params] invalid parameters`。
+成功调用使用带 `schema_version: 1` 的同一 JSON envelope。非 NULL 的查询单元格是 `{"encoding","value"}`。`encoding` 为 `integer`、`float`、`utf8` 或 `base64`。SQL `NULL` 是 JSON `null`。文档约定之外的驱动类型失败，错误是 `[mysql_result_encoding_failed] result encoding failed`。
+
+`tools call` 在打开 MySQL 之前解析 JSON。`[]`、`null` 和 `"x"` 失败，错误以 `parse tool params JSON:` 开头。这不是 `[mysql_invalid_params]`。JSON 对象会继续。`tools call` 接着调用 `buildRuntimeToolsets`，它会连接并做启动探测，然后 `DecodeToolParams` 才检查字段。设置了 `MYSQL_MCP_USERNAME` 且 MySQL 没有在监听时，`{}` 返回 `[mysql_connection_failed] connection failed`，即使这个对象对 `mysql_query` 也是无效的。没有用户名时，`{}` 先打印 `mysql runtime configuration unavailable: MYSQL_MCP_USERNAME is required`，然后返回 `[mysql_invalid_params] invalid parameters`。
+
+在 MCP 上，不是 JSON 对象的参数由传输处理函数返回 `[mysql_invalid_params] invalid parameters`，此时还没有进入工具函数。未知、缺失、空字符串和非字符串字段在工具处理函数里检查。在 CLI 上，这次字段检查发生在连接尝试之后。
 
 `mysql_query` 只接受一条解析后的读查询。它拒绝多语句、非查询语句、`INTO`、锁定读、用户变量赋值和已阻断的会话/文件函数。通过后查询在只读事务中执行，并始终回滚。
 
@@ -191,13 +195,13 @@ HTTP 和 SSE 没有认证，也没有 TLS。`--listen` 的默认值是 `127.0.0.
 mysql runtime configuration unavailable: MYSQL_MCP_USERNAME is required
 ```
 
-随后的工具调用返回 `[mysql_configuration_unavailable] configuration unavailable`。`tools call` 以状态 1 退出。`tools list` 和 `tools describe` 不读取这些变量。
+字段有效的工具调用随后返回 `[mysql_configuration_unavailable] configuration unavailable`。`tools list` 和 `tools describe` 不读取这些变量。
 
 地址拒绝连接或不可达时，返回 `[mysql_connection_failed] connection failed`。连接成功之前不会做权限检查。
 
 ### 服务器设置
 
-`--port`、`--listen`、`--sse-base-url` 和 `--log-level` 只存在于 `mysql-mcp-server mcp`。`tools` 会拒绝这些 flag。在 `mcp` 上，你传入的 flag 优先，然后是环境变量，然后是 YAML 文件，最后是默认值。没有 `MYSQL_MCP_` 前缀的名字，例如 `MCP_PORT`，会被忽略。
+`--port`、`--listen`、`--sse-base-url` 和 `--log-level` 只存在于 `mysql-mcp-server mcp`。`tools` 会拒绝这些 flag。在 `mcp` 上，你传入的 flag 优先。非空环境变量其次。`AutomaticEnv` 没有调用 `AllowEmptyEnv`，所以空的 `MYSQL_MCP_PORT` 或 `MYSQL_MCP_LOG_LEVEL` 会留下 YAML 里的值。然后使用 YAML 文件。最后使用默认值。没有 `MYSQL_MCP_` 前缀的名字，例如 `MCP_PORT`，会被忽略。
 
 | 设置 | `mcp` flag | 环境变量 | YAML 键 | 默认 |
 |---|---|---|---|---|
@@ -208,7 +212,7 @@ mysql runtime configuration unavailable: MYSQL_MCP_USERNAME is required
 
 `tools` 从 `MYSQL_MCP_LOG_LEVEL` 或 YAML 的 `log_level` 读取日志级别。它没有 `--log-level` flag。日志级别是 `trace`、`debug`、`info`、`warn`、`error`、`fatal`、`panic` 和 `disabled`。stdio 模式和 `tools call` 会把低于 `error` 的级别提升到 `error`，因此那里看不到危险角色警告。HTTP 模式使用你设置的级别。默认 `info` 时，HTTP 模式会显示这条警告。
 
-`--config`、`--enabled-tools`、`--disabled-tools`、`--enable-domains` 和 `--disable-domains` 是持久 flag。它们在 `mcp` 和 `tools` 上都有效。顺序同样是 flag，然后环境变量，然后 YAML，然后默认值。
+`--config`、`--enabled-tools`、`--disabled-tools`、`--enable-domains` 和 `--disable-domains` 是持久 flag。它们在 `mcp` 和 `tools` 上都有效。你传入的 flag 优先。非空环境变量其次。空的 `MYSQL_MCP_ENABLED_TOOLS` 或 `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` 会留下 YAML 里的值，包括 `allow_unsafe_database_role: true`。然后使用 YAML 文件。最后使用默认值。
 
 | 设置 | Flag | 环境变量 | YAML 键 | 默认 |
 |---|---|---|---|---|
@@ -227,7 +231,7 @@ MYSQL_MCP_ENABLED_TOOLS=mysql_query ./bin/mysql-mcp-server tools list
 
 第一条命令打印 `mysql_query` 和 `mysql_list_databases`。第二条命令打印 `mysql_query`。
 
-`MYSQL_MCP_MASKING_JSON` 不在上表中。该变量一旦存在，就整份替换 YAML 里的 `masking` 对象。见[输出脱敏](#输出脱敏)。
+`MYSQL_MCP_MASKING_JSON` 不在上表中。它使用 `os.LookupEnv`，不使用空变量规则。变量存在且为空时，即使 YAML 里的 `masking` 对象有效，加载配置也会失败，错误是 `load config: invalid masking config`。变量未设置时，保留 YAML 对象。见[输出脱敏](#输出脱敏)。
 
 ### 服务账号
 
@@ -329,7 +333,7 @@ HTTP 调试日志记录路由类别（`mcp`、`sse`、`message` 或 `other`）�
 | 文本 | 时机 |
 |---|---|
 | `[mysql_configuration_unavailable] configuration unavailable` | 连接环境缺失，或服务没有创建。 |
-| `[mysql_invalid_params] invalid parameters` | 参数不是 JSON 对象，或者某个值未知、缺失、为空、或不是字符串。不会访问数据库。 |
+| `[mysql_invalid_params] invalid parameters` | 在 MCP 上，传输处理函数对非对象参数返回这段文本，此时还没有进入工具函数。工具处理函数对未知、缺失、空或非字符串字段返回同一段文本。`tools call` 只有在已经尝试连接之后才会做这次字段检查。 |
 | `[mysql_connection_failed] connection failed` | 驱动错误是截止时间、`driver.ErrBadConn`、`sql.ErrConnDone`，或 `net.Error`。 |
 | `[mysql_unsafe_service_role] database service role is not permitted` | 账号有被拒绝的权限，且没有打开豁免。 |
 | `[mysql_query_rejected] query rejected` | `mysql_query` 拒绝这段 SQL。 |

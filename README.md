@@ -54,7 +54,11 @@ export MYSQL_MCP_DATABASE='inventory'
 | `mysql_list_indexes` | `database`, `table` | Indexes and key parts. |
 | `mysql_query` | `sql` | Columns and encoded rows from one query. |
 
-Successful calls use a JSON envelope with `schema_version: 1`. A non-null query cell is `{"encoding","value"}`. `encoding` is `integer`, `float`, `utf8`, or `base64`. SQL `NULL` is JSON `null`. A driver value outside that set fails with `[mysql_result_encoding_failed] result encoding failed`. Before any database call, an argument set that is not a JSON object, or a value that is unknown, missing, empty, or not a string, returns `[mysql_invalid_params] invalid parameters`.
+Successful calls use a JSON envelope with `schema_version: 1`. A non-null query cell is `{"encoding","value"}`. `encoding` is `integer`, `float`, `utf8`, or `base64`. SQL `NULL` is JSON `null`. A driver value outside that set fails with `[mysql_result_encoding_failed] result encoding failed`.
+
+`tools call` parses the JSON before it opens MySQL. `[]`, `null`, and `"x"` fail with an error that starts `parse tool params JSON:`. That is not `[mysql_invalid_params]`. A JSON object continues. `tools call` then calls `buildRuntimeToolsets`, which connects and runs the startup probe, before `DecodeToolParams` checks fields. With `MYSQL_MCP_USERNAME` set and MySQL not listening, `{}` returns `[mysql_connection_failed] connection failed` even when that object is also invalid for `mysql_query`. With no username, `{}` prints `mysql runtime configuration unavailable: MYSQL_MCP_USERNAME is required` and then returns `[mysql_invalid_params] invalid parameters`.
+
+Over MCP, an argument that is not a JSON object returns `[mysql_invalid_params] invalid parameters` in the transport handler, before the tool function. Unknown, missing, empty, and non-string fields are checked inside the tool handler. On the CLI, that field check runs only after the connection attempt.
 
 `mysql_query` accepts one parsed read query only. It rejects multiple or
 non-query statements, `INTO`, locking reads, user-variable assignments, and
@@ -201,13 +205,13 @@ The server reads the connection only from these environment variables. A flag, a
 mysql runtime configuration unavailable: MYSQL_MCP_USERNAME is required
 ```
 
-A tool call then returns `[mysql_configuration_unavailable] configuration unavailable`. `tools call` exits 1. `tools list` and `tools describe` do not read these variables.
+A tool call whose fields are valid then returns `[mysql_configuration_unavailable] configuration unavailable`. `tools list` and `tools describe` do not read these variables.
 
 A refused or unreachable address returns `[mysql_connection_failed] connection failed`. The privilege check does not run until the connection succeeds.
 
 ### Server settings
 
-`--port`, `--listen`, `--sse-base-url`, and `--log-level` exist only on `mysql-mcp-server mcp`. `tools` rejects those flags. On `mcp`, a flag you pass wins, then the environment variable, then the YAML file, then the default. Names such as `MCP_PORT`, without the `MYSQL_MCP_` prefix, are ignored.
+`--port`, `--listen`, `--sse-base-url`, and `--log-level` exist only on `mysql-mcp-server mcp`. `tools` rejects those flags. On `mcp`, a flag you pass wins. A non-empty environment variable wins next. `AutomaticEnv` does not call `AllowEmptyEnv`, so an empty `MYSQL_MCP_PORT` or `MYSQL_MCP_LOG_LEVEL` leaves the YAML value. Then the YAML file is used. Then the default is used. Names such as `MCP_PORT`, without the `MYSQL_MCP_` prefix, are ignored.
 
 | Setting | `mcp` flag | Environment variable | YAML key | Default |
 |---|---|---|---|---|
@@ -218,7 +222,7 @@ A refused or unreachable address returns `[mysql_connection_failed] connection f
 
 `tools` reads the log level from `MYSQL_MCP_LOG_LEVEL` or YAML `log_level`. It has no `--log-level` flag. Log levels are `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic`, and `disabled`. In stdio mode and during `tools call`, the server writes only `error` and more severe levels, even when you set a lower level. The unsafe-role warning is not shown there. HTTP mode uses the level you set. At the default `info` level, HTTP mode shows that warning.
 
-`--config`, `--enabled-tools`, `--disabled-tools`, `--enable-domains`, and `--disable-domains` are persistent flags. They work on `mcp` and on `tools`. The same order applies: flag, then environment variable, then YAML, then default.
+`--config`, `--enabled-tools`, `--disabled-tools`, `--enable-domains`, and `--disable-domains` are persistent flags. They work on `mcp` and on `tools`. A flag you pass wins. A non-empty environment variable wins next. An empty `MYSQL_MCP_ENABLED_TOOLS` or `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` leaves the YAML value, including `allow_unsafe_database_role: true`. Then the YAML file is used. Then the default is used.
 
 | Setting | Flag | Environment variable | YAML key | Default |
 |---|---|---|---|---|
@@ -237,7 +241,7 @@ MYSQL_MCP_ENABLED_TOOLS=mysql_query ./bin/mysql-mcp-server tools list
 
 The first command prints `mysql_query` and `mysql_list_databases`. The second prints `mysql_query`.
 
-`MYSQL_MCP_MASKING_JSON` is not one of the rows above. When that variable is present, it replaces the whole YAML `masking` object. See [Output masking](#output-masking).
+`MYSQL_MCP_MASKING_JSON` is not one of the rows above. It uses `os.LookupEnv`, not the empty-variable rule. If the variable is present and empty, configuration load fails with `load config: invalid masking config` even when the YAML `masking` object is valid. If the variable is unset, the YAML object is kept. See [Output masking](#output-masking).
 
 ### Service account
 
@@ -339,7 +343,7 @@ These strings are fixed. They do not include SQL text, the password, or the mask
 | Text | When |
 |---|---|
 | `[mysql_configuration_unavailable] configuration unavailable` | The connection environment is missing or the service was not created. |
-| `[mysql_invalid_params] invalid parameters` | The arguments are not a JSON object, or a value is unknown, missing, empty, or not a string. No database call is made. |
+| `[mysql_invalid_params] invalid parameters` | Over MCP, the transport handler returns this for a non-object argument before the tool function. The tool handler returns it for an unknown, missing, empty, or non-string field. `tools call` reaches that field check only after it has already tried to connect. |
 | `[mysql_connection_failed] connection failed` | The driver error is a deadline, `driver.ErrBadConn`, `sql.ErrConnDone`, or a `net.Error`. |
 | `[mysql_unsafe_service_role] database service role is not permitted` | The account has a rejected privilege and the opt-out is false. |
 | `[mysql_query_rejected] query rejected` | `mysql_query` refuses the SQL text. |

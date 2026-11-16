@@ -11,12 +11,15 @@ disabled_tools: []
 enabled_domains: []
 disabled_domains: []
 # Skip only the startup service-account privilege check. Leave false unless a
-# least-privilege account is unavailable. Also MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE.
+# least-privilege account is unavailable. A non-empty
+# MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE replaces this value. An empty value
+# does not, so true stays true.
 allow_unsafe_database_role: false
 
 # Output masking is off unless enabled is true and at least one rule is set.
-# MYSQL_MCP_MASKING_JSON, when set, replaces this object. An empty value is
-# invalid. Leaving the variable unset keeps this object.
+# MYSQL_MCP_MASKING_JSON is not the empty-variable rule above. If the variable
+# is present, including when it is empty, configuration load fails even if the
+# object below is valid. Leaving the variable unset keeps this object.
 # masking:
 #   enabled: false
 #   placeholder: "[masked]"
