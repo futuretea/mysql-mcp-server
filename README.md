@@ -222,7 +222,7 @@ A refused or unreachable address returns `[mysql_connection_failed] connection f
 
 `tools` reads the log level from `MYSQL_MCP_LOG_LEVEL` or YAML `log_level`. It has no `--log-level` flag. Log levels are `trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic`, and `disabled`. In stdio mode and during `tools call`, the server writes only `error` and more severe levels, even when you set a lower level. The unsafe-role warning is not shown there. HTTP mode uses the level you set. At the default `info` level, HTTP mode shows that warning.
 
-`--config`, `--enabled-tools`, `--disabled-tools`, `--enable-domains`, and `--disable-domains` are persistent flags. They work on `mcp` and on `tools`. A flag you pass wins. A non-empty environment variable wins next. An empty `MYSQL_MCP_ENABLED_TOOLS` or `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` leaves the YAML value, including `allow_unsafe_database_role: true`. Then the YAML file is used. Then the default is used.
+`--config`, `--enabled-tools`, `--disabled-tools`, `--enable-domains`, and `--disable-domains` are persistent flags. They work on `mcp` and on `tools`. A flag you pass wins. A non-empty environment variable wins next. An empty `MYSQL_MCP_ENABLED_TOOLS` or `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` leaves the YAML value, including `allow_unsafe_database_role: true`. Then the YAML file is used. Then the default is used. A tool or domain list that has entries, but no names after trimming, is rejected. `MYSQL_MCP_DISABLED_TOOLS` set to spaces does not remove a YAML denylist. An empty environment variable still leaves the YAML value. `--disabled-tools=` is empty and still replaces that value.
 
 | Setting | Flag | Environment variable | YAML key | Default |
 |---|---|---|---|---|
