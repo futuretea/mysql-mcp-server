@@ -212,7 +212,7 @@ mysql runtime configuration unavailable: MYSQL_MCP_USERNAME is required
 
 `tools` 从 `MYSQL_MCP_LOG_LEVEL` 或 YAML 的 `log_level` 读取日志级别。它没有 `--log-level` flag。日志级别是 `trace`、`debug`、`info`、`warn`、`error`、`fatal`、`panic` 和 `disabled`。stdio 模式和 `tools call` 会把低于 `error` 的级别提升到 `error`，因此那里看不到危险角色警告。HTTP 模式使用你设置的级别。默认 `info` 时，HTTP 模式会显示这条警告。
 
-`--config`、`--enabled-tools`、`--disabled-tools`、`--enable-domains` 和 `--disable-domains` 是持久 flag。它们在 `mcp` 和 `tools` 上都有效。你传入的 flag 优先。非空环境变量其次。空的 `MYSQL_MCP_ENABLED_TOOLS` 或 `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` 会留下 YAML 里的值，包括 `allow_unsafe_database_role: true`。然后使用 YAML 文件。最后使用默认值。
+`--config`、`--enabled-tools`、`--disabled-tools`、`--enable-domains` 和 `--disable-domains` 是持久 flag。它们在 `mcp` 和 `tools` 上都有效。你传入的 flag 优先。非空环境变量其次。空的 `MYSQL_MCP_ENABLED_TOOLS` 或 `MYSQL_MCP_ALLOW_UNSAFE_DATABASE_ROLE` 会留下 YAML 里的值，包括 `allow_unsafe_database_role: true`。然后使用 YAML 文件。最后使用默认值。工具或 domain 列表有条目，但去掉空白后没有名字时，加载会被拒绝。`MYSQL_MCP_DISABLED_TOOLS` 只有空格时，不会清掉 YAML 里的禁用列表。空环境变量仍保留 YAML 的值。`--disabled-tools=` 是空 flag，仍会替换该值。
 
 | 设置 | Flag | 环境变量 | YAML 键 | 默认 |
 |---|---|---|---|---|
